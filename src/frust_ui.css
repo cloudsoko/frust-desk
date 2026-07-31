@@ -1,0 +1,1266 @@
+/* ============================================================================
+   Frust UI — a Desk-local design system (WO-037)
+   frappe-ui visual language, Topcoat-native (server-rendered, no Vue/SPA).
+
+   Token values are lifted verbatim from frappe-ui's published design tokens
+   (espresso-v2 primitives + semantic Light/Dark styles, frappe/frappe-ui repo),
+   resolved to concrete hex. Semantics follow the frappe-ui `ink` / `surface` /
+   `outline` ladder. Nothing here is guessed.
+
+   Theming: light tokens live on :root and [data-theme="light"]; dark tokens on
+   [data-theme="dark"]. Because tokens can be re-declared on any element, a
+   light panel and a dark panel can sit side by side on one page (the gallery
+   proof). No JS is required to switch.
+   ========================================================================== */
+
+/* ---- Tokens: light (default) ---------------------------------------------- */
+:root,
+[data-theme="light"] {
+  /* surfaces (backgrounds) */
+  --fui-surface-base: #ffffff;
+  --fui-surface-1: #f8f8f8;      /* subtle / hovered rows / sidebar */
+  --fui-surface-2: #f3f3f3;      /* hover surface, quiet fill */
+  --fui-surface-3: #ededed;      /* pressed */
+  --fui-surface-4: #e2e2e2;
+  --fui-elevation: #ffffff;      /* cards */
+  --fui-elevation-2: #ffffff;    /* dialog body */
+
+  /* ink (foreground / text ladder) */
+  --fui-ink-9: #0f0f0f;          /* strongest: headings, KPI figures */
+  --fui-ink-8: #171717;          /* titles, primary content, body */
+  --fui-ink-7: #383838;          /* secondary values, table cells */
+  --fui-ink-6: #525252;          /* field labels, form icons */
+  --fui-ink-5: #7c7c7c;          /* meta, timestamps, placeholder */
+  --fui-ink-4: #999999;          /* faint / disabled glyphs */
+
+  /* outlines (borders / rings) */
+  --fui-outline-1: #ededed;      /* default hairline */
+  --fui-outline-2: #e2e2e2;      /* standard border */
+  --fui-outline-3: #c7c7c7;      /* control border (inputs) */
+
+  /* accent — brand blue */
+  --fui-blue: #0d8ef8;           /* blue-500, accent surface */
+  --fui-blue-strong: #077ddf;    /* blue-600, hover / active */
+  --fui-blue-ink: #077ddf;       /* links */
+  --fui-blue-surface-1: #f1f8fe;
+  --fui-blue-surface-2: #e6f4ff;
+  --fui-blue-outline: #b5ddfd;
+
+  /* feedback — red / green / amber */
+  --fui-red: #e03434;
+  --fui-red-strong: #ce2c2c;
+  --fui-red-ink: #ce2c2c;
+  --fui-red-surface-1: #fff5f5;
+  --fui-red-surface-2: #ffe7e7;
+  --fui-red-outline: #fdc2c2;
+
+  --fui-green: #268c5c;
+  --fui-green-strong: #14804d;
+  --fui-green-ink: #268c5c;
+  --fui-green-surface-1: #f0faf3;
+  --fui-green-surface-2: #e4faeb;
+  --fui-green-outline: #bdefcc;
+
+  --fui-amber: #ca7e0c;
+  --fui-amber-strong: #bb6f0c;
+  --fui-amber-ink: #bb6f0c;
+  --fui-amber-surface-1: #fdf8ed;
+  --fui-amber-surface-2: #fff4d3;
+  --fui-amber-outline: #f6eac0;
+
+  /* primary button (solid gray — frappe-ui canonical primary, auto-flips) */
+  --fui-primary-bg: #171717;
+  --fui-primary-bg-hover: #0f0f0f;
+  --fui-primary-fg: #ffffff;
+
+  /* focus ring */
+  --fui-focus-ring: rgba(13, 142, 248, 0.30);
+
+  /* shadows — subtle, frappe-quiet */
+  --fui-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.06), 0 1px 1px 0 rgba(0, 0, 0, 0.04);
+  --fui-shadow-md: 0 2px 4px -1px rgba(0, 0, 0, 0.06), 0 4px 10px -2px rgba(0, 0, 0, 0.08);
+  --fui-shadow-lg: 0 10px 20px -4px rgba(0, 0, 0, 0.12), 0 4px 8px -4px rgba(0, 0, 0, 0.08);
+
+  color-scheme: light;
+}
+
+/* ---- Tokens: dark --------------------------------------------------------- */
+[data-theme="dark"] {
+  --fui-surface-base: #171717;
+  --fui-surface-1: #1f1f1f;
+  --fui-surface-2: #292929;
+  --fui-surface-3: #383838;
+  --fui-surface-4: #424242;
+  --fui-elevation: #1f1f1f;
+  --fui-elevation-2: #242424;
+
+  --fui-ink-9: #f8f8f8;
+  --fui-ink-8: #d9d9d9;
+  --fui-ink-7: #afafaf;
+  --fui-ink-6: #999999;
+  --fui-ink-5: #7a7a7a;
+  --fui-ink-4: #575757;
+
+  --fui-outline-1: #242424;
+  --fui-outline-2: #383838;
+  --fui-outline-3: #424242;
+
+  --fui-blue: #2480cc;
+  --fui-blue-strong: #349bef;
+  --fui-blue-ink: #349bef;
+  --fui-blue-surface-1: #0f233d;
+  --fui-blue-surface-2: #0a2e5c;
+  --fui-blue-outline: #074783;
+
+  --fui-red: #b03030;
+  --fui-red-strong: #8e2e2e;
+  --fui-red-ink: #eb4c4c;
+  --fui-red-surface-1: #391416;
+  --fui-red-surface-2: #592222;
+  --fui-red-outline: #742a2a;
+
+  --fui-green: #128251;
+  --fui-green-strong: #077241;
+  --fui-green-ink: #359768;
+  --fui-green-surface-1: #072716;
+  --fui-green-surface-2: #0e3521;
+  --fui-green-outline: #0a4229;
+
+  --fui-amber: #af5e0e;
+  --fui-amber-strong: #985315;
+  --fui-amber-ink: #e9a144;
+  --fui-amber-surface-1: #331c06;
+  --fui-amber-surface-2: #452608;
+  --fui-amber-outline: #5a2d07;
+
+  /* primary flips to a light high-contrast surface (frappe dark pattern) */
+  --fui-primary-bg: #f8f8f8;
+  --fui-primary-bg-hover: #d9d9d9;
+  --fui-primary-fg: #1f1f1f;
+
+  --fui-focus-ring: rgba(52, 155, 239, 0.38);
+
+  --fui-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.45);
+  --fui-shadow-md: 0 2px 6px -1px rgba(0, 0, 0, 0.5), 0 4px 12px -2px rgba(0, 0, 0, 0.45);
+  --fui-shadow-lg: 0 12px 26px -6px rgba(0, 0, 0, 0.62), 0 4px 10px -4px rgba(0, 0, 0, 0.5);
+
+  color-scheme: dark;
+}
+
+/* ---- Tokens: dark BY PREFERENCE (WO-042) ----------------------------------
+   The token sets above switch on an explicit [data-theme]. That is the
+   override; this is the default. Re-declaring the dark set under
+   prefers-color-scheme is what makes "light/dark with no JS" true for a user
+   who never touches a toggle - and [data-theme="light"] still wins over it,
+   because an explicit choice must beat an inferred one.
+   -------------------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --fui-surface-base: #171717;
+    --fui-surface-1: #1f1f1f;
+    --fui-surface-2: #292929;
+    --fui-surface-3: #383838;
+    --fui-ink-9: #ffffff;
+    --fui-ink-8: #e2e2e2;
+    --fui-ink-7: #c7c7c7;
+    --fui-ink-6: #a8a8a8;
+    --fui-ink-5: #8f8f8f;
+    --fui-ink-4: #7c7c7c;
+    --fui-outline-1: #333333;
+    --fui-outline-2: #3f3f3f;
+    --fui-outline-3: #525252;
+    --fui-focus-ring: rgba(52, 155, 239, 0.38);
+    --fui-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.45);
+    --fui-shadow-md: 0 2px 6px -1px rgba(0, 0, 0, 0.5), 0 4px 12px -2px rgba(0, 0, 0, 0.45);
+    --fui-shadow-lg: 0 12px 26px -6px rgba(0, 0, 0, 0.62), 0 4px 10px -4px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+
+/* ---- Geometry / type scale ------------------------------------------------ */
+:root {
+  --fui-font: "Inter", "InterVar", system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --fui-font-mono: "SFMono-Regular", "JetBrains Mono", "Menlo", Consolas,
+    monospace;
+
+  --fui-radius-sm: 4px;    /* tags, chips */
+  --fui-radius: 6px;       /* buttons, inputs, list rows */
+  --fui-radius-md: 8px;    /* cards */
+  --fui-radius-lg: 12px;   /* dialogs */
+  --fui-radius-full: 9999px;
+
+  /* pixel type scale (frappe-ui: same px, tight line-height for labels) */
+  --fui-text-2xs: 11px;
+  --fui-text-xs: 12px;
+  --fui-text-sm: 13px;
+  --fui-text-base: 14px;
+  --fui-text-md: 15px;
+  --fui-text-lg: 16px;
+  --fui-text-xl: 17px;
+  --fui-text-2xl: 18px;
+  --fui-text-3xl: 20px;
+
+  /* WO-042: the spacing scale the app chrome needed. WO-037's components used
+     literal px because each was self-contained; page layout wants a shared
+     rhythm, and inventing one per rule is how a design system drifts. 4px base,
+     matching the component paddings already in this file. */
+  --fui-space-1: 4px;
+  --fui-space-2: 8px;
+  --fui-space-3: 12px;
+  --fui-space-4: 16px;
+  --fui-space-5: 20px;
+  --fui-space-6: 24px;
+  --fui-space-8: 32px;
+
+  /* WO-042: alias — the app chrome refers to the sans stack by an explicit
+     name. Pointing it at the existing token rather than redeclaring the stack
+     keeps ONE definition of the font. */
+  --fui-font-sans: var(--fui-font);
+}
+
+/* ---- Reset-ish base ------------------------------------------------------- */
+.fui-root,
+.fui-root * {
+  box-sizing: border-box;
+}
+.fui-root {
+  font-family: var(--fui-font);
+  font-size: var(--fui-text-base);
+  line-height: 1.5;
+  color: var(--fui-ink-8);
+  background: var(--fui-surface-base);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.fui-root h1,
+.fui-root h2,
+.fui-root h3 {
+  color: var(--fui-ink-9);
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+.fui-root h1 { font-size: var(--fui-text-3xl); }
+.fui-root h2 { font-size: var(--fui-text-xl); }
+.fui-root h3 { font-size: var(--fui-text-lg); }
+.fui-root p { margin: 0; }
+.fui-root a {
+  color: var(--fui-blue-ink);
+  text-decoration: none;
+}
+.fui-root a:hover { text-decoration: underline; }
+.fui-root hr {
+  border: none;
+  border-top: 1px solid var(--fui-outline-1);
+  margin: 0;
+}
+
+/* helper text roles */
+.fui-muted { color: var(--fui-ink-5); }
+.fui-label-quiet {
+  color: var(--fui-ink-5);
+  font-size: var(--fui-text-sm);
+  font-weight: 500;
+}
+
+/* Global focus-visible ring (frappe: one ring for every focusable) */
+.fui-root :focus-visible {
+  outline: 2px solid var(--fui-blue);
+  outline-offset: 1px;
+  border-radius: var(--fui-radius);
+}
+
+/* ============================================================================
+   Button
+   ========================================================================== */
+.fui-btn {
+  --_h: 28px;
+  --_px: 12px;
+  --_fs: var(--fui-text-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--_h);
+  padding: 0 var(--_px);
+  font-family: inherit;
+  font-size: var(--_fs);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: var(--fui-radius);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.1s ease, border-color 0.1s ease,
+    color 0.1s ease, box-shadow 0.1s ease;
+}
+.fui-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--fui-surface-base), 0 0 0 4px var(--fui-focus-ring);
+}
+.fui-btn:disabled,
+.fui-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.fui-btn__icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.fui-btn__icon svg { width: 100%; height: 100%; display: block; }
+
+/* sizes */
+.fui-btn--sm { --_h: 24px; --_px: 8px;  --_fs: var(--fui-text-xs); }
+.fui-btn--md { --_h: 28px; --_px: 12px; --_fs: var(--fui-text-sm); }
+.fui-btn--lg { --_h: 36px; --_px: 16px; --_fs: var(--fui-text-base); }
+.fui-btn--block { display: flex; width: 100%; }
+.fui-btn--icon-only { padding: 0; width: var(--_h); }
+
+/* variants */
+.fui-btn--primary {
+  background: var(--fui-primary-bg);
+  color: var(--fui-primary-fg);
+}
+.fui-btn--primary:hover { background: var(--fui-primary-bg-hover); }
+
+.fui-btn--secondary {
+  background: var(--fui-surface-base);
+  border-color: var(--fui-outline-2);
+  color: var(--fui-ink-8);
+}
+.fui-btn--secondary:hover {
+  background: var(--fui-surface-2);
+  border-color: var(--fui-outline-3);
+}
+
+.fui-btn--ghost {
+  background: transparent;
+  color: var(--fui-ink-7);
+}
+.fui-btn--ghost:hover {
+  background: var(--fui-surface-2);
+  color: var(--fui-ink-8);
+}
+
+.fui-btn--accent {
+  background: var(--fui-blue);
+  color: #ffffff;
+}
+.fui-btn--accent:hover { background: var(--fui-blue-strong); }
+
+.fui-btn--danger {
+  background: var(--fui-red);
+  color: #ffffff;
+}
+.fui-btn--danger:hover { background: var(--fui-red-strong); }
+
+/* ============================================================================
+   Inputs — text, textarea, select
+   ========================================================================== */
+.fui-input,
+.fui-textarea,
+.fui-select {
+  display: block;
+  width: 100%;
+  font-family: inherit;
+  font-size: var(--fui-text-base);
+  line-height: 1.4;
+  color: var(--fui-ink-8);
+  background: var(--fui-surface-base);
+  border: 1px solid var(--fui-outline-3);
+  border-radius: var(--fui-radius);
+  transition: border-color 0.1s ease, box-shadow 0.1s ease,
+    background-color 0.1s ease;
+}
+.fui-input,
+.fui-select {
+  height: 28px;
+  padding: 0 10px;
+}
+.fui-textarea {
+  min-height: 72px;
+  padding: 7px 10px;
+  resize: vertical;
+}
+.fui-input::placeholder,
+.fui-textarea::placeholder { color: var(--fui-ink-5); }
+
+.fui-input:hover,
+.fui-textarea:hover,
+.fui-select:hover { border-color: var(--fui-ink-4); }
+
+.fui-input:focus,
+.fui-textarea:focus,
+.fui-select:focus {
+  outline: none;
+  border-color: var(--fui-blue);
+  box-shadow: 0 0 0 2.5px var(--fui-focus-ring);
+}
+.fui-input:disabled,
+.fui-textarea:disabled,
+.fui-select:disabled {
+  background: var(--fui-surface-2);
+  color: var(--fui-ink-5);
+  cursor: not-allowed;
+}
+
+/* select gets a caret glyph */
+.fui-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237c7c7c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 30px;
+}
+
+/* invalid state (used by FormControl error) */
+.fui-input--invalid,
+.fui-textarea--invalid,
+.fui-select--invalid {
+  border-color: var(--fui-red);
+}
+.fui-input--invalid:focus,
+.fui-textarea--invalid:focus,
+.fui-select--invalid:focus {
+  box-shadow: 0 0 0 2.5px rgba(224, 52, 52, 0.22);
+}
+
+/* ============================================================================
+   Checkbox
+   ========================================================================== */
+.fui-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fui-text-base);
+  color: var(--fui-ink-8);
+  cursor: pointer;
+  user-select: none;
+}
+.fui-check input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: none;
+  background: var(--fui-surface-base);
+  border: 1px solid var(--fui-outline-3);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.1s ease, border-color 0.1s ease;
+}
+.fui-check input[type="checkbox"]:hover { border-color: var(--fui-ink-4); }
+.fui-check input[type="checkbox"]:checked {
+  background-color: var(--fui-blue);
+  border-color: var(--fui-blue);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+}
+.fui-check input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--fui-surface-base), 0 0 0 4px var(--fui-focus-ring);
+}
+.fui-check input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ============================================================================
+   Badge
+   ========================================================================== */
+.fui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  font-size: var(--fui-text-xs);
+  font-weight: 500;
+  line-height: 1;
+  border-radius: var(--fui-radius-sm);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.fui-badge__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--fui-radius-full);
+  background: currentColor;
+  flex: none;
+  opacity: 0.9;
+}
+.fui-badge--pill { border-radius: var(--fui-radius-full); }
+
+/* subtle (default frappe badge) */
+.fui-badge--gray   { background: var(--fui-surface-2);          color: var(--fui-ink-7); }
+.fui-badge--blue   { background: var(--fui-blue-surface-2);     color: var(--fui-blue-ink); }
+.fui-badge--green  { background: var(--fui-green-surface-2);    color: var(--fui-green-ink); }
+.fui-badge--red    { background: var(--fui-red-surface-2);      color: var(--fui-red-ink); }
+.fui-badge--amber  { background: var(--fui-amber-surface-2);    color: var(--fui-amber-ink); }
+
+/* solid */
+.fui-badge--solid.fui-badge--gray  { background: var(--fui-ink-8);   color: var(--fui-surface-base); }
+.fui-badge--solid.fui-badge--blue  { background: var(--fui-blue);    color: #fff; }
+.fui-badge--solid.fui-badge--green { background: var(--fui-green);   color: #fff; }
+.fui-badge--solid.fui-badge--red   { background: var(--fui-red);     color: #fff; }
+.fui-badge--solid.fui-badge--amber { background: var(--fui-amber);   color: #fff; }
+
+/* outline */
+.fui-badge--outline { background: transparent; }
+.fui-badge--outline.fui-badge--gray  { border-color: var(--fui-outline-3); color: var(--fui-ink-7); }
+.fui-badge--outline.fui-badge--blue  { border-color: var(--fui-blue-outline);  color: var(--fui-blue-ink); }
+.fui-badge--outline.fui-badge--green { border-color: var(--fui-green-outline); color: var(--fui-green-ink); }
+.fui-badge--outline.fui-badge--red   { border-color: var(--fui-red-outline);   color: var(--fui-red-ink); }
+.fui-badge--outline.fui-badge--amber { border-color: var(--fui-amber-outline); color: var(--fui-amber-ink); }
+
+/* ============================================================================
+   Card / Panel
+   ========================================================================== */
+.fui-card {
+  background: var(--fui-elevation);
+  border: 1px solid var(--fui-outline-1);
+  border-radius: var(--fui-radius-md);
+  box-shadow: var(--fui-shadow-sm);
+}
+.fui-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--fui-outline-1);
+}
+.fui-card__title {
+  font-size: var(--fui-text-md);
+  font-weight: 600;
+  color: var(--fui-ink-8);
+}
+.fui-card__body { padding: 16px; }
+
+/* a "panel" is a flat card (no shadow) — used for grouping */
+.fui-panel {
+  background: var(--fui-surface-1);
+  border: 1px solid var(--fui-outline-1);
+  border-radius: var(--fui-radius-md);
+  padding: 16px;
+}
+
+/* ============================================================================
+   FormControl (label + control + description/error)
+   ========================================================================== */
+.fui-field { display: block; }
+.fui-field__label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: var(--fui-text-sm);
+  font-weight: 500;
+  color: var(--fui-ink-6);
+}
+.fui-field__req { color: var(--fui-red-ink); margin-left: 2px; }
+.fui-field__desc {
+  margin-top: 5px;
+  font-size: var(--fui-text-xs);
+  line-height: 1.5;
+  color: var(--fui-ink-5);
+}
+.fui-field__error {
+  margin-top: 5px;
+  font-size: var(--fui-text-xs);
+  line-height: 1.5;
+  color: var(--fui-red-ink);
+}
+
+/* ============================================================================
+   ListRow
+   ========================================================================== */
+.fui-list {
+  border: 1px solid var(--fui-outline-1);
+  border-radius: var(--fui-radius-md);
+  overflow: hidden;
+  background: var(--fui-surface-base);
+}
+.fui-listrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--fui-outline-1);
+  transition: background-color 0.08s ease;
+}
+.fui-listrow:last-child { border-bottom: none; }
+.fui-listrow:hover { background: var(--fui-surface-1); }
+.fui-listrow__lead { flex: none; display: inline-flex; }
+.fui-listrow__avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--fui-radius-full);
+  background: var(--fui-blue-surface-2);
+  color: var(--fui-blue-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fui-text-xs);
+  font-weight: 600;
+  flex: none;
+}
+.fui-listrow__main { min-width: 0; flex: 1; }
+.fui-listrow__title {
+  font-size: var(--fui-text-base);
+  font-weight: 500;
+  color: var(--fui-ink-8);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fui-listrow__meta {
+  margin-top: 2px;
+  font-size: var(--fui-text-sm);
+  color: var(--fui-ink-5);
+}
+.fui-listrow__trailing {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fui-ink-5);
+  font-size: var(--fui-text-sm);
+}
+
+/* ============================================================================
+   Dialog / Modal  (static, server-rendered; :target-driven open/close)
+   ========================================================================== */
+.fui-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 15, 15, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 16px 16px;
+  z-index: 50;
+}
+.fui-dialog {
+  width: 100%;
+  max-width: 480px;
+  background: var(--fui-elevation-2);
+  border: 1px solid var(--fui-outline-1);
+  border-radius: var(--fui-radius-lg);
+  box-shadow: var(--fui-shadow-lg);
+  overflow: hidden;
+}
+.fui-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 0;
+}
+.fui-dialog__title {
+  font-size: var(--fui-text-lg);
+  font-weight: 600;
+  color: var(--fui-ink-9);
+}
+.fui-dialog__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin: -4px -6px 0 0;
+  border: none;
+  background: transparent;
+  color: var(--fui-ink-5);
+  border-radius: var(--fui-radius);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  text-decoration: none;
+}
+.fui-dialog__close:hover { background: var(--fui-surface-2); color: var(--fui-ink-8); }
+.fui-dialog__body {
+  padding: 12px 18px 4px;
+  font-size: var(--fui-text-base);
+  color: var(--fui-ink-7);
+  line-height: 1.55;
+}
+.fui-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 18px 18px;
+}
+
+/* Inline (non-overlay) dialog rendering for the gallery so both themes show
+   the surface without a fixed full-screen backdrop stealing the viewport. */
+.fui-dialog--inline .fui-dialog__backdrop-note { display: none; }
+.fui-dialog-preview {
+  background: repeating-linear-gradient(
+      -45deg,
+      var(--fui-surface-2),
+      var(--fui-surface-2) 10px,
+      var(--fui-surface-1) 10px,
+      var(--fui-surface-1) 20px);
+  border: 1px solid var(--fui-outline-1);
+  border-radius: var(--fui-radius-md);
+  padding: 24px;
+  display: flex;
+  justify-content: center;
+}
+.fui-dialog-preview .fui-dialog { max-width: 400px; }
+
+/* ============================================================================
+   Alert / Toast
+   ========================================================================== */
+.fui-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--fui-radius-md);
+  font-size: var(--fui-text-sm);
+  line-height: 1.5;
+}
+.fui-alert__icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+.fui-alert__icon svg { width: 100%; height: 100%; display: block; }
+.fui-alert__body { min-width: 0; }
+.fui-alert__title {
+  font-weight: 600;
+  color: inherit;
+}
+.fui-alert__text { color: var(--fui-ink-6); margin-top: 1px; }
+
+.fui-alert--info    { background: var(--fui-blue-surface-1);  border-color: var(--fui-blue-outline);  color: var(--fui-blue-ink); }
+.fui-alert--success { background: var(--fui-green-surface-1); border-color: var(--fui-green-outline); color: var(--fui-green-ink); }
+.fui-alert--warning { background: var(--fui-amber-surface-1); border-color: var(--fui-amber-outline); color: var(--fui-amber-ink); }
+.fui-alert--danger  { background: var(--fui-red-surface-1);   border-color: var(--fui-red-outline);   color: var(--fui-red-ink); }
+
+/* Toast = an elevated alert, positioned bottom-right in real use */
+.fui-toast {
+  box-shadow: var(--fui-shadow-md);
+  background: var(--fui-elevation-2);
+  border: 1px solid var(--fui-outline-1);
+  min-width: 260px;
+  color: var(--fui-ink-8);
+}
+.fui-toast .fui-alert__text { color: var(--fui-ink-6); }
+
+/* ============================================================================
+   Gallery scaffolding (page-local; not part of the component set)
+   ========================================================================== */
+.fui-gallery {
+  min-height: 100vh;
+  margin: 0;
+  background: #ebeef0;
+  font-family: var(--fui-font);
+  color: #171717;
+}
+[data-theme="dark"].fui-gallery,
+.fui-gallery [data-theme="dark"] { color: var(--fui-ink-8); }
+.fui-gallery__bar {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 18px 24px;
+  background: #ffffff;
+  border-bottom: 1px solid #e2e2e2;
+}
+.fui-gallery__bar h1 { font-size: 18px; font-weight: 700; margin: 0; color: #0f0f0f; }
+.fui-gallery__bar .fui-gallery__sub { font-size: 13px; color: #7c7c7c; }
+.fui-gallery__grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  padding: 20px;
+  align-items: start;
+}
+@media (min-width: 1080px) {
+  .fui-gallery__grid { grid-template-columns: 1fr 1fr; }
+}
+.fui-pane {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--fui-outline-2);
+  box-shadow: var(--fui-shadow-md);
+}
+.fui-pane__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: var(--fui-surface-1);
+  border-bottom: 1px solid var(--fui-outline-1);
+  color: var(--fui-ink-6);
+}
+.fui-pane__body {
+  padding: 22px;
+  background: var(--fui-surface-base);
+}
+.fui-section { margin-bottom: 26px; }
+.fui-section:last-child { margin-bottom: 0; }
+.fui-section > h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fui-ink-5);
+  margin: 0 0 12px;
+}
+.fui-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.fui-stack { display: flex; flex-direction: column; gap: 12px; }
+.fui-stack--tight { gap: 8px; }
+.fui-swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+  gap: 8px;
+}
+.fui-swatch {
+  border-radius: var(--fui-radius);
+  border: 1px solid var(--fui-outline-1);
+  overflow: hidden;
+  font-size: 10px;
+}
+.fui-swatch__chip { height: 34px; }
+.fui-swatch__name {
+  padding: 3px 6px;
+  color: var(--fui-ink-6);
+  background: var(--fui-surface-base);
+  border-top: 1px solid var(--fui-outline-1);
+  font-family: var(--fui-font-mono);
+}
+
+
+/* ==========================================================================
+   WO-042 - APP CHROME + THE BEHAVIOUR LAYER
+   ==========================================================================
+   Everything below is what turns the WO-037 component set into the Desk a
+   user actually opens: page chrome, and the three interactions WO-037 named
+   as Topcoat's real ceiling.
+
+   The ranked order from WO-037 is held: CSS-only first, server round-trip
+   next, the six-verb bridge only where a zero-round-trip interaction genuinely
+   needs it. All three below land on rung (a) or (b). No JS ships for any.
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* WO-042: `fui_button` can now render an <a> (the Desk's actions are
+   navigations, not JS handlers). The base class was written for <button>, so
+   the anchor form inherits link underline and colour — reset both, and let the
+   variant own the colour as it does for a real button. */
+a.fui-btn { text-decoration: none; }
+a.fui-btn:hover { text-decoration: none; }
+
+body {
+  margin: 0;
+  background: var(--fui-surface-1);
+  color: var(--fui-ink-8);
+  font-family: var(--fui-font-sans);
+  font-size: var(--fui-text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Nav ------------------------------------------------------------------ */
+
+.fui-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--fui-space-4);
+  padding: 0 var(--fui-space-6);
+  height: 3.25rem;
+  background: var(--fui-surface-base);
+  border-bottom: 1px solid var(--fui-outline-1);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.fui-nav-brand {
+  font-weight: 700;
+  font-size: var(--fui-text-lg);
+  color: var(--fui-ink-9);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.fui-nav-link {
+  color: var(--fui-ink-6);
+  text-decoration: none;
+  font-size: var(--fui-text-sm);
+  font-weight: 500;
+  padding: var(--fui-space-1) var(--fui-space-2);
+  border-radius: var(--fui-radius-sm);
+}
+.fui-nav-link:hover { color: var(--fui-ink-9); background: var(--fui-surface-2); }
+.fui-nav-spacer { flex: 1; }
+.fui-nav-user {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fui-space-2);
+  font-size: var(--fui-text-sm);
+  color: var(--fui-ink-7);
+}
+
+.fui-main {
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: var(--fui-space-6);
+}
+
+/* ---- Page header ---------------------------------------------------------- */
+
+.fui-page-head {
+  display: flex;
+  align-items: center;
+  gap: var(--fui-space-3);
+  margin-bottom: var(--fui-space-5);
+  flex-wrap: wrap;
+}
+.fui-page-title {
+  font-size: var(--fui-text-2xl);
+  font-weight: 600;
+  color: var(--fui-ink-9);
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+.fui-page-actions { margin-left: auto; display: flex; gap: var(--fui-space-2); flex-wrap: wrap; }
+
+/* ---- Table ---------------------------------------------------------------- */
+
+.fui-table-wrap {
+  background: var(--fui-surface-base);
+  border: 1px solid var(--fui-outline-1);
+  border-radius: var(--fui-radius-lg);
+  overflow: hidden;
+}
+.fui-table { width: 100%; border-collapse: collapse; font-size: var(--fui-text-sm); }
+.fui-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--fui-ink-5);
+  padding: var(--fui-space-3) var(--fui-space-4);
+  border-bottom: 1px solid var(--fui-outline-1);
+  background: var(--fui-surface-1);
+  white-space: nowrap;
+}
+.fui-table td {
+  padding: var(--fui-space-3) var(--fui-space-4);
+  border-bottom: 1px solid var(--fui-outline-1);
+  color: var(--fui-ink-8);
+}
+.fui-table tbody tr:last-child td { border-bottom: 0; }
+.fui-table tbody tr:hover { background: var(--fui-surface-1); }
+.fui-table a { color: #2490ef; text-decoration: none; font-weight: 500; }
+.fui-table a:hover { text-decoration: underline; }
+.fui-empty {
+  padding: var(--fui-space-8) var(--fui-space-4);
+  text-align: center;
+  color: var(--fui-ink-5);
+  font-size: var(--fui-text-sm);
+}
+
+/* ---- Filter bar ----------------------------------------------------------- */
+
+.fui-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--fui-space-3);
+  margin-bottom: var(--fui-space-4);
+  padding: var(--fui-space-4);
+  background: var(--fui-surface-base);
+  border: 1px solid var(--fui-outline-1);
+  border-radius: var(--fui-radius-lg);
+}
+
+/* ---- Form ----------------------------------------------------------------- */
+
+.fui-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: var(--fui-space-4);
+}
+.fui-form-actions {
+  display: flex;
+  gap: var(--fui-space-2);
+  margin-top: var(--fui-space-5);
+  padding-top: var(--fui-space-4);
+  border-top: 1px solid var(--fui-outline-1);
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   BEHAVIOUR 1 - DIALOG, rung (a): CSS-only via :target
+   ==========================================================================
+   Open is a link to #id, close is a link back to #. No JS, no server state,
+   and it survives a reload closed - which a checkbox-hack does not.
+
+   Focus-trap and escape-to-close are DELIBERATELY NOT emulated. :target
+   cannot express either, and faking a trap with tabindex juggling is worse
+   than not claiming one. Native <dialog> does both for free but needs
+   showModal() - i.e. JS - so this is the honest CSS ceiling. Escape is
+   PARTLY covered for free: the Back button closes it, because the open state
+   is a history entry. NAMED, not hidden.
+   -------------------------------------------------------------------------- */
+
+.fui-modal {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: var(--fui-space-4);
+  z-index: 50;
+}
+.fui-modal:target { display: flex; }
+.fui-modal__scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); }
+.fui-modal__panel {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 28rem;
+  background: var(--fui-surface-base);
+  border: 1px solid var(--fui-outline-2);
+  border-radius: var(--fui-radius-lg);
+  box-shadow: var(--fui-shadow-lg);
+  padding: var(--fui-space-5);
+}
+.fui-modal__title {
+  margin: 0 0 var(--fui-space-2);
+  font-size: var(--fui-text-lg);
+  font-weight: 600;
+  color: var(--fui-ink-9);
+}
+.fui-modal__text {
+  margin: 0 0 var(--fui-space-4);
+  color: var(--fui-ink-6);
+  font-size: var(--fui-text-sm);
+}
+.fui-modal__actions { display: flex; justify-content: flex-end; gap: var(--fui-space-2); }
+
+/* ==========================================================================
+   BEHAVIOUR 2 - TOAST, rung (a): CSS-only auto-dismiss + stacking
+   ==========================================================================
+   Stacking is flex-column. Auto-dismiss is one keyframe with `forwards`, so
+   the toast fades out and stops taking pointer events - no timer, no JS.
+   -------------------------------------------------------------------------- */
+
+.fui-toast-stack {
+  position: fixed;
+  top: 4rem;
+  right: var(--fui-space-5);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--fui-space-2);
+  max-width: min(24rem, calc(100vw - 2rem));
+}
+.fui-toast-stack .fui-toast {
+  box-shadow: var(--fui-shadow-lg);
+  animation: fui-toast-in 160ms ease-out, fui-toast-out 400ms ease-in 6s forwards;
+}
+@keyframes fui-toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fui-toast-out {
+  to { opacity: 0; transform: translateY(-8px); visibility: hidden; }
+}
+/* Respect a user who asked for less motion: no slide, and NO auto-dismiss -
+   vanishing text is exactly what that preference is about. */
+@media (prefers-reduced-motion: reduce) {
+  .fui-toast-stack .fui-toast { animation: none; }
+}
+
+/* ==========================================================================
+   BEHAVIOUR 3 - COMBOBOX, rung (b): server round-trip typeahead
+   ==========================================================================
+   The kernel already holds the option set, so the honest path is to ask it:
+   type, submit, the server filters and re-renders. A <datalist> gives the
+   native dropdown affordance for free on top of the plain input.
+
+   Rung (a) cannot do this - CSS cannot filter on typed text - and rung (c)
+   would trade one round trip for a client runtime the Desk does not otherwise
+   need. This is the one interaction where the ranked order lands on (b),
+   exactly as WO-037 predicted.
+   -------------------------------------------------------------------------- */
+
+.fui-combobox { display: flex; gap: var(--fui-space-2); align-items: center; }
+.fui-combobox input { flex: 1; }
+.fui-combobox__hint {
+  font-size: var(--fui-text-xs);
+  color: var(--fui-ink-5);
+  margin-top: var(--fui-space-1);
+}
+
+/* ---- Read-only field value (WO-042) --------------------------------------- */
+/* A frozen field is a STATE, not a disabled input. The lattice (ADR-009) has
+   made this value permanent; rendering a greyed-out text box would suggest it
+   is merely inactive and might come back. */
+.fui-readonly {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 2px;
+  color: var(--fui-ink-8);
+  font-size: var(--fui-text-base);
+}
+
+/* ── WO-045 criterion 0: browser print, zero dependencies ────────────────────
+ *
+ * The free rung. The Desk's pages are already single-document, zero-subresource
+ * HTML, which is the ideal print input — so the interactive case ("a user prints
+ * an invoice from the Desk") costs a stylesheet and no engine at all.
+ *
+ * What this CAN do: drop the app chrome, force the light palette onto paper,
+ * strip the affordances of an editor (buttons, the remove column, the dirty
+ * banner), flatten form controls so their VALUES read as text, and keep table
+ * rows off page breaks.
+ *
+ * What it CANNOT do is the finding: the record page is an EDITING FORM. Its
+ * fields are `<input>`s, its line table has a "remove" column and an "+ Add row"
+ * button, and its labels are form labels. Flattening the controls makes it
+ * legible, not a document — it prints as a tidy form, never as an invoice with
+ * a letterhead, an issue date and a totals block. That artifact does not exist
+ * yet, and it is the SAME artifact a PDF engine would have to consume. See the
+ * spike's position paper.
+ */
+@media print {
+  /* Paper is white and one-sided: pin the light palette regardless of the
+     user's OS theme, or a dark-mode Desk prints a black rectangle. */
+  :root {
+    --fui-surface-base: #ffffff;
+    --fui-surface-1: #ffffff;
+    --fui-surface-2: #ffffff;
+    --fui-surface-3: #ffffff;
+    --fui-surface-4: #ffffff;
+    color-scheme: light;
+  }
+
+  @page { margin: 16mm 14mm; }
+
+  html, body {
+    background: #fff !important;
+    color: #000 !important;
+    font-size: 11pt;
+  }
+
+  /* App chrome and every affordance that only makes sense on screen. */
+  .fui-nav,
+  .fui-page-actions,
+  .fui-form-actions,
+  .fui-toast,
+  .fui-dialog,
+  .fui-dialog__backdrop,
+  #dirty-note,
+  #conflict-note,
+  .fui-btn,
+  form fieldset > button,
+  /* The line EDITOR's last column is "remove". Scoped to `form` deliberately:
+     an unscoped `table td:last-child` also ate the AMOUNT column of the
+     read-only document view (WO-046), which is the same class of silent
+     wrongness as WO-042's invented class name — CSS has no type system, so the
+     selector has to say which table it means. */
+  form table th:last-child,
+  form table td:last-child {
+    display: none !important;
+  }
+
+  .fui-main { padding: 0 !important; max-width: none !important; }
+
+  /* Form controls carry the DATA, so they must print their values as text
+     rather than as boxes — a printed invoice full of input outlines reads as a
+     screenshot of software, not as a document. */
+  .fui-input, .fui-select, .fui-textarea, input, select, textarea {
+    border: none !important;
+    background: transparent !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    -webkit-appearance: none;
+    appearance: none;
+    color: #000 !important;
+    font: inherit !important;
+  }
+  .fui-field__label, label { color: #444 !important; font-size: 9pt; }
+
+  /* Line tables are the part that most often straddles a page boundary. */
+  table { width: 100%; border-collapse: collapse; }
+  thead { display: table-header-group; }   /* repeat headers across pages */
+  tr, img { break-inside: avoid; page-break-inside: avoid; }
+  th, td { border-bottom: 1px solid #ddd; padding: 4px 6px; text-align: left; }
+
+  /* Links: on paper a bare underline is noise, but a URL nobody can follow is
+     worse — so only ANNOTATE links that leave the document. */
+  a { color: #000 !important; text-decoration: none !important; }
+  a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 8pt; color: #666; }
+}
+
+/* ── WO-046: the document view ───────────────────────────────────────────────
+ *
+ * A read-only DOCUMENT, not a form. Deliberately plain: this same HTML is what
+ * a PDF engine would consume the day ADR-014's deferred half is pulled, so the
+ * styling stays in the stylesheet and out of the markup.
+ */
+.fui-doc {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: var(--fui-space-6) 0;
+  color: var(--fui-ink-9);
+}
+.fui-doc__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  border-bottom: 2px solid currentColor;
+  padding-bottom: 10px;
+}
+.fui-doc__title { font-size: var(--fui-text-2xl); font-weight: 600; letter-spacing: -0.01em; }
+.fui-doc__id { font-size: var(--fui-text-sm); color: var(--fui-ink-6); margin-top: 2px; }
+.fui-doc__meta { text-align: right; font-size: var(--fui-text-sm); color: var(--fui-ink-6); }
+
+/* label/value pairs — a definition list because that is what they are */
+.fui-doc__fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 20px;
+  margin: 20px 0 0;
+}
+.fui-doc__fields dt { color: var(--fui-ink-6); font-size: var(--fui-text-sm); }
+.fui-doc__fields dd { margin: 0; }
+
+.fui-doc__lines { width: 100%; border-collapse: collapse; margin-top: 22px; }
+.fui-doc__lines th {
+  text-align: left;
+  font-size: var(--fui-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fui-ink-6);
+  border-bottom: 1px solid var(--fui-ink-4);
+  padding: 6px 8px;
+}
+.fui-doc__lines td { padding: 6px 8px; border-bottom: 1px solid var(--fui-outline-1); }
+/* money and quantities right-align and share a column width, so the decimal
+   points line up down the page the way an invoice's do */
+.fui-doc__lines th.n, .fui-doc__lines td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.fui-doc__foot { margin-top: 28px; }

@@ -1,0 +1,28 @@
+[package]
+name = "frust-desk"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `time` is explicit (not left to feature unification via topcoat/sse): the SSE
+# stream sleeps between kernel drains with tokio::time, and a build that got the
+# feature only transitively would break the day the transitive edge moved.
+tokio = { version = "1.51", features = ["rt-multi-thread", "macros", "time", "sync"] }
+# the vendored Topcoat trunk (AmeinEskinder/frust): path dep, pin governed
+topcoat = { path = "../topcoat/crates/topcoat", features = ["websocket", "sse"] }
+futures-core = "0.3"
+futures-util = "0.3"
+ureq = { version = "3", features = ["json"] }
+
+[features]
+# WO-032 control only — reproduces the thread-per-subscriber stall the SSE
+# design avoids, so the concurrency measurement can be shown to detect it.
+# Never enabled in a shipped build.
+naive-blocking-sse = []
+
+[profile.dev]
+debug = 0
