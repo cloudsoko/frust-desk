@@ -546,6 +546,21 @@
 }
 .fui-card__body { padding: 16px; }
 
+/* WO-056: the home workspace's "start here" grid. Cards are derived from
+   metadata (one per submittable DocType), so this must lay out an unknown
+   number of them without a hardcoded column count. */
+.fui-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 1rem;
+}
+.fui-card__actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px 16px;
+}
+
 /* a "panel" is a flat card (no shadow) — used for grouping */
 .fui-panel {
   background: var(--fui-surface-1);

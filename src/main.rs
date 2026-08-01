@@ -796,9 +796,44 @@ async fn home(cx: &Cx) -> Result {
     let _permit = admit()?;
     let doctypes = meta_list(&s).await?;
     let is_manager = s.role == "manager";
+    // ── WO-056: a workspace, not a schema browser ──
+    //
+    // The survey's first finding was that a person who wants to invoice
+    // someone landed on an alphabetical table of every DocType in the
+    // database — `thing` and `WO-042 order` beside `sales invoice`, child
+    // tables and write-closed rollups offering "New". That is a developer's
+    // view of a database, not a place to start work.
+    //
+    // The tasks are DERIVED, not hardcoded: a doctype is a "start here" card
+    // if it is submittable (the things with a lifecycle are the things you
+    // act on). So an app installed tomorrow gets its own cards with no
+    // recompile — the metadata-driven promise applied to navigation.
+    let starters: Vec<&DocType> = doctypes.iter().filter(|d| d.submittable).collect();
     view! {
         <div class="fui-page-head">
-            <h1 class="fui-page-title">"DocTypes"</h1>
+            <h1 class="fui-page-title">"Home"</h1>
+        </div>
+        if !starters.is_empty() {
+            <div class="fui-cards">
+                for dt in &starters {
+                    <div class="fui-card">
+                        <div class="fui-card__title">(dt.label_or_name())</div>
+                        <div class="fui-card__actions">
+                            frust_ui::fui_button(
+                                label: "New", variant: "primary", icon: "plus",
+                                href: format!("/form/{}", dt.name),
+                            )
+                            frust_ui::fui_button(
+                                label: "Open list", variant: "ghost",
+                                href: format!("/list/{}", dt.name),
+                            )
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        <div class="fui-page-head" style="margin-top:1.5rem;">
+            <h2 class="fui-page-title" style="font-size:1.1rem;">"All DocTypes"</h2>
             if is_manager {
                 <div class="fui-page-actions">
                     // WO-042 behaviour 1: CSS-only dialog. The trigger is a
@@ -1192,7 +1227,18 @@ async fn list_page(cx: &Cx) -> Result {
                     if rows.is_empty() {
                         <tr>
                             <td colspan="12">
-                                <div class="fui-empty">"Nothing here yet — nothing matches this filter."</div>
+                                // WO-056: a first-run user and a user whose
+                                // filter matched nothing need different
+                                // sentences. Telling someone with an empty
+                                // table to check a filter they never set sends
+                                // them to the one thing that isn't the problem.
+                                if q.field.is_some() && q.value.is_some() {
+                                    <div class="fui-empty">"Nothing matches this filter."</div>
+                                } else {
+                                    <div class="fui-empty">
+                                        "No " (dt.label_or_name()) " yet — create the first one."
+                                    </div>
+                                }
                             </td>
                         </tr>
                     }
@@ -1286,6 +1332,84 @@ fn docstatus_color(ds: i64) -> &'static str {
 /// not to silently tidy. Money is stored *at* scale, so `1.005` in a 2-place
 /// field means something upstream is wrong, and a display layer that quietly
 /// printed `1.01` would hide it at the exact moment someone could still see it.
+/// **WO-058: exact decimal subtraction, for a DERIVED report column.**
+///
+/// The AR report exists to answer "what does this customer owe", which is
+/// `charged - paid`. That is a subtraction, and the one thing it must never be
+/// is a float: this project has killed the float-money defect three times
+/// (WO-016 Currency mapped `TYPE float`; WO-021's rounding rules; WO-030's
+/// three-hosts-one-answer), and a financial report quietly doing
+/// `300.0 - 120.0` in f64 would reintroduce it at the last mile.
+///
+/// **Where this computes, stated because WO-058 required it to be:** in the
+/// **Desk**, on the decimal *strings* the kernel sent, via scaled integers —
+/// no float type is constructed at any point. Presentation-derived, never
+/// stored, so ADR-007's compare-never-compute is untouched (the report shows a
+/// number; it writes nothing).
+///
+/// **The finding this exposes, recorded rather than papered over:** the Desk
+/// has no shared decimal. `decimal.rs` lives in the kernel and is compiled into
+/// the script sandbox (WO-030), so this is a THIRD implementation of decimal
+/// arithmetic in the codebase, and WO-030's own lesson was that three hosts
+/// must give one answer. This one is deliberately the smallest thing that can
+/// be correct — subtraction at a fixed scale, nothing else — but the honest
+/// long-term home is a kernel report path (or an exposed decimal), and that is
+/// a decision for the PM, not something to settle inside a Desk WO.
+///
+/// Returns `None` when either side isn't a plain decimal, so the caller shows
+/// nothing rather than a wrong number.
+fn money_sub(a: &str, b: &str, scale: usize) -> Option<String> {
+    let scaled = |raw: &str| -> Option<i128> {
+        let t = raw.trim();
+        if t.is_empty() {
+            return None;
+        }
+        let (neg, digits) = match t.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, t.strip_prefix('+').unwrap_or(t)),
+        };
+        let (int, frac) = match digits.split_once('.') {
+            Some((i, f)) => (i, f),
+            None => (digits, ""),
+        };
+        if int.is_empty() && frac.is_empty() {
+            return None;
+        }
+        if !int.chars().all(|c| c.is_ascii_digit()) || !frac.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        // More places than the scale is REFUSED, not rounded — the same
+        // posture `pad_money` takes. Silently dropping a place in a money
+        // subtraction is precisely the defect class this guards.
+        if frac.len() > scale {
+            return None;
+        }
+        let mut n: i128 = int.parse().ok()?;
+        for _ in 0..scale {
+            n = n.checked_mul(10)?;
+        }
+        let mut f: i128 = if frac.is_empty() { 0 } else { frac.parse().ok()? };
+        for _ in 0..(scale - frac.len()) {
+            f = f.checked_mul(10)?;
+        }
+        let total = n.checked_add(f)?;
+        Some(if neg { -total } else { total })
+    };
+
+    let diff = scaled(a)?.checked_sub(scaled(b)?)?;
+    let neg = diff < 0;
+    let mag = diff.unsigned_abs();
+    let unit = 10u128.checked_pow(u32::try_from(scale).ok()?)?;
+    let (whole, frac) = (mag / unit, mag % unit);
+    Some(format!(
+        "{}{}.{:0width$}",
+        if neg { "-" } else { "" },
+        whole,
+        frac,
+        width = scale
+    ))
+}
+
 fn pad_money(raw: &str, scale: usize) -> String {
     let t = raw.trim();
     if t.is_empty() {
@@ -2828,11 +2952,26 @@ async fn reports_index(cx: &Cx) -> Result {
     let s = require_session(cx)?;
     let _permit = admit()?;
     let doctypes = meta_list(&s).await?;
-    let mut entries: Vec<(String, String, String)> = Vec::new(); // (rollup, tier, source)
+    // **WO-058: one entry per ROLLUP, not per declaration.**
+    //
+    // A rollup fed by two sources (invoice -> charged, payment -> paid)
+    // declared two aggregates, and this list emitted one row each — so
+    // "ar outstanding" appeared TWICE, two identical links to the same report,
+    // with nothing to tell them apart. The rollup is the thing a person opens;
+    // the declarations are how it is fed.
+    let mut entries: Vec<(String, String, Vec<String>)> = Vec::new(); // (rollup, tier, sources)
     for dt in &doctypes {
         for a in &dt.aggregates {
             let tier = if a.kind == "counter" { "Tier 1 · exact" } else { "Tier 2 · eventually consistent" };
-            entries.push((a.rollup.clone(), tier.to_string(), dt.name.clone()));
+            match entries.iter_mut().find(|(r, _, _)| r == &a.rollup) {
+                // a rollup fed by several doctypes lists all of them
+                Some((_, _, sources)) => {
+                    if !sources.contains(&dt.name) {
+                        sources.push(dt.name.clone());
+                    }
+                }
+                None => entries.push((a.rollup.clone(), tier.to_string(), vec![dt.name.clone()])),
+            }
         }
     }
     view! {
@@ -2841,11 +2980,11 @@ async fn reports_index(cx: &Cx) -> Result {
             <p style="color:#666;">"No aggregates are declared yet. Declare one on a DocType's metadata and it appears here."</p>
         }
         <table border="0" cellpadding="6" style="border-collapse: collapse;">
-            for (rollup, tier, source) in &entries {
+            for (rollup, tier, sources) in &entries {
                 <tr style="border-bottom: 1px solid #eee;">
                     <td><a href=(format!("/report/{rollup}"))><b>(rollup.replace('_', " "))</b></a></td>
                     <td><small style="color:#666;">(tier)</small></td>
-                    <td><small style="color:#666;">"from " (source)</small></td>
+                    <td><small style="color:#666;">"from " (sources.join(", "))</small></td>
                 </tr>
             }
         </table>
@@ -2861,15 +3000,42 @@ async fn report_page(cx: &Cx) -> Result {
     let _permit = admit()?;
     let rollup = path_param::<RollupName>(cx)?.to_string();
     let doctypes = meta_list(&s).await?;
-    let agg = doctypes
+    // **WO-058: a rollup is fed by EVERY declaration that targets it.**
+    //
+    // This used to `.find()` the first one, so a rollup fed by two doctypes
+    // rendered one of them: `paid` showed and `charged` was absent, while the
+    // stored row had both. The report is about the rollup, so it unions the
+    // metrics of all the declarations that maintain it.
+    let feeding: Vec<(&DocType, &Aggregate)> = doctypes
         .iter()
         .flat_map(|dt| dt.aggregates.iter().map(move |a| (dt, a)))
-        .find(|(_, a)| a.rollup == rollup);
-    let Some((source_dt, agg)) = agg else {
+        .filter(|(_, a)| a.rollup == rollup)
+        .collect();
+    let Some((source_dt, agg)) = feeding.first().copied() else {
         return view! { error_block(message: "No such report.".to_string(), back: "/reports".to_string()) };
     };
-    let is_tier2 = agg.kind == "worker";
-    let metric_names: Vec<String> = agg.metrics.iter().map(|m| m.name.clone()).collect();
+    // Tier-2 if ANY feeder is worker-maintained: the weakest guarantee is the
+    // one the reader must be told about.
+    let is_tier2 = feeding.iter().any(|(_, a)| a.kind == "worker");
+    let sources: Vec<String> = feeding.iter().map(|(dt, _)| dt.name.clone()).collect();
+    let mut metric_names: Vec<String> = Vec::new();
+    for (_, a) in &feeding {
+        for m in &a.metrics {
+            if !metric_names.contains(&m.name) {
+                metric_names.push(m.name.clone());
+            }
+        }
+    }
+    let _ = (source_dt, agg);
+
+    // **The derived column the report exists for.** `outstanding = charged -
+    // paid`, computed with `money_sub` (scaled integers, no float anywhere) —
+    // see its doc comment for where this computes and the finding it records.
+    // Derived only when BOTH metrics are present, so this stays a convention
+    // the accounting rollup satisfies rather than a column invented for every
+    // rollup in the system.
+    let derives_outstanding = metric_names.iter().any(|m| m == "charged")
+        && metric_names.iter().any(|m| m == "paid");
 
     // the rollup is a DocType: read through the same contract as any record
     let body = serde_json::json!({ "order": { "path": "k", "dir": "asc" }, "limit": 200 });
@@ -2899,7 +3065,7 @@ async fn report_page(cx: &Cx) -> Result {
             } else {
                 "Tier-1 rollup (transaction-exact) from "
             }
-            <b>(&source_dt.name)</b>
+            <b>(sources.join(", "))</b>
         </p>
         if let Some(l) = &lag {
             <p style=(format!(
@@ -2919,6 +3085,9 @@ async fn report_page(cx: &Cx) -> Result {
                 for m in &metric_names {
                     <th>(m)</th>
                 }
+                if derives_outstanding {
+                    <th>"outstanding"</th>
+                }
                 if metric_names.is_empty() {
                     <th>"qty"</th>
                     <th>"amount"</th>
@@ -2929,7 +3098,18 @@ async fn report_page(cx: &Cx) -> Result {
                     <td>(row["k"].as_str().unwrap_or("?").to_string())</td>
                     <td style="text-align: right;">(cell(&row["n"]))</td>
                     for m in &metric_names {
-                        <td style="text-align: right;">(cell(&row[m]))</td>
+                        // money padded per the WO-046 display ruling: the
+                        // store drops trailing zeros, so `300` is shown `300.00`
+                        <td style="text-align: right;">(pad_money(&cell(&row[m]), MONEY_SCALE))</td>
+                    }
+                    if derives_outstanding {
+                        <td style="text-align: right; font-weight: 600;">(
+                            money_sub(
+                                &cell(&row["charged"]),
+                                &cell(&row["paid"]),
+                                MONEY_SCALE,
+                            ).unwrap_or_default()
+                        )</td>
                     }
                     if metric_names.is_empty() {
                         <td style="text-align: right;">(cell(&row["qty"]))</td>
@@ -2987,11 +3167,47 @@ async fn audit_page(cx: &Cx) -> Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{pad_money, MONEY_SCALE};
+    use super::{money_sub, pad_money, MONEY_SCALE};
 
     /// The money-formatting ruling, pinned. The interesting cases are the two
     /// at the edges: SurrealDB's stripped trailing zero (which is why this
     /// helper exists) and the over-scale value (which must SURVIVE, not round).
+    #[test]
+    fn money_sub_is_exact_and_never_float() {
+        // the report's own question: Meridian charged 300, paid 120
+        assert_eq!(money_sub("300", "120", 2).as_deref(), Some("180.00"));
+        assert_eq!(money_sub("300.00", "120.00", 2).as_deref(), Some("180.00"));
+
+        // the classic float traps — an f64 implementation fails these
+        assert_eq!(money_sub("0.30", "0.10", 2).as_deref(), Some("0.20"));
+        assert_eq!(money_sub("0.03", "0.01", 2).as_deref(), Some("0.02"));
+        assert_eq!(money_sub("1.10", "1.00", 2).as_deref(), Some("0.10"));
+        // 4.35 and 8.45 are the textbook binary-representation offenders
+        assert_eq!(money_sub("8.45", "4.35", 2).as_deref(), Some("4.10"));
+
+        // overpayment is a real accounting state, not an error
+        assert_eq!(money_sub("100.00", "150.00", 2).as_deref(), Some("-50.00"));
+        // nothing charged, nothing paid
+        assert_eq!(money_sub("0", "0", 2).as_deref(), Some("0.00"));
+        // a missing side yields nothing shown, never a wrong number
+        assert_eq!(money_sub("", "120", 2), None);
+        assert_eq!(money_sub("300", "", 2), None);
+        // and non-decimal input is refused rather than coerced
+        assert_eq!(money_sub("N/A", "1", 2), None);
+        assert_eq!(money_sub("1.0.0", "1", 2), None);
+
+        // OVER-SCALE IS REFUSED, not rounded — the same posture pad_money
+        // takes. Silently dropping a place inside a money subtraction is the
+        // defect this whole function exists to avoid.
+        assert_eq!(money_sub("1.005", "1.00", 2), None);
+
+        // large values stay exact (i128, not f64's 2^53 mantissa limit)
+        assert_eq!(
+            money_sub("99999999999.99", "0.01", 2).as_deref(),
+            Some("99999999999.98")
+        );
+    }
+
     #[test]
     fn pad_money_pads_to_scale_and_never_rounds() {
         // the case that motivated the ruling: `37.50` is stored as `37.5`
