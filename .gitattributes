@@ -1,0 +1,2 @@
+/assets/engine/*.js text eol=lf
+/assets/engine/*.wasm binary
