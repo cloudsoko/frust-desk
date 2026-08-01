@@ -2922,7 +2922,7 @@ function _lowerFlatU8(ctx) {
   _requireValidNumericPrimitive.bind('u8', ctx.vals[0]);
   
   if (!ctx.memory) { throw new Error("missing memory for lower"); }
-  new DataView(ctx.memory.buffer).setUint32(ctx.storagePtr, ctx.vals[0], true);
+  new DataView(ctx.memory.buffer).setUint8(ctx.storagePtr, ctx.vals[0]);
   
   ctx.storagePtr += 1;
 }
@@ -4313,7 +4313,13 @@ const _trampoline8 = function(arg0) {
     
   }
   
-  for (const rsc of curResourceBorrows) {
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
     rsc[symbolRscHandle] = undefined;
   }
   curResourceBorrows = [];
@@ -4416,7 +4422,13 @@ const _trampoline9 = function(arg0) {
     
   }
   
-  for (const rsc of curResourceBorrows) {
+  for (const entry of curResourceBorrows) {
+    const rsc = entry.rsc ?? entry;
+    if (entry.drop) {
+      if (rsc[symbolRscHandle]) {
+        entry.drop(rsc[symbolRscHandle]);
+      }
+    }
     rsc[symbolRscHandle] = undefined;
   }
   curResourceBorrows = [];
@@ -5232,7 +5244,13 @@ const _trampoline18 = function(arg0, arg1) {
   ret = { tag: 'err', val: getErrorPayload(e) };
 }
 
-for (const rsc of curResourceBorrows) {
+for (const entry of curResourceBorrows) {
+  const rsc = entry.rsc ?? entry;
+  if (entry.drop) {
+    if (rsc[symbolRscHandle]) {
+      entry.drop(rsc[symbolRscHandle]);
+    }
+  }
   rsc[symbolRscHandle] = undefined;
 }
 curResourceBorrows = [];
@@ -5365,7 +5383,13 @@ const _trampoline19 = function(arg0, arg1, arg2, arg3) {
   ret = { tag: 'err', val: getErrorPayload(e) };
 }
 
-for (const rsc of curResourceBorrows) {
+for (const entry of curResourceBorrows) {
+  const rsc = entry.rsc ?? entry;
+  if (entry.drop) {
+    if (rsc[symbolRscHandle]) {
+      entry.drop(rsc[symbolRscHandle]);
+    }
+  }
   rsc[symbolRscHandle] = undefined;
 }
 curResourceBorrows = [];
@@ -5494,7 +5518,13 @@ const _trampoline20 = function(arg0, arg1) {
   ret = { tag: 'err', val: getErrorPayload(e) };
 }
 
-for (const rsc of curResourceBorrows) {
+for (const entry of curResourceBorrows) {
+  const rsc = entry.rsc ?? entry;
+  if (entry.drop) {
+    if (rsc[symbolRscHandle]) {
+      entry.drop(rsc[symbolRscHandle]);
+    }
+  }
   rsc[symbolRscHandle] = undefined;
 }
 curResourceBorrows = [];
