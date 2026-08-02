@@ -666,6 +666,12 @@ async fn root_layout(cx: &Cx, slot: Result) -> Result {
                         <a href="/reports" class="fui-nav-link">"Reports"</a>
                     }
                     <span class="fui-nav-spacer"></span>
+                    <a
+                        href="https://github.com/cloudsoko/frust"
+                        class="fui-nav-link"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                    >"Source"</a>
                     match &sess {
                         Some(s) => {
                             <span class="fui-nav-user">
