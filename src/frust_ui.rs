@@ -158,6 +158,7 @@ pub async fn fui_input(
     let cls = if invalid { "fui-input fui-input--invalid" } else { "fui-input" };
     view! {
         <input class=(cls) type=(kind) name=(name) placeholder=(placeholder) value=(value)
+            if !name.is_empty() { id=(name) }
             if !list.is_empty() { list=(list) }
             if required { required="required" }
             if autofocus { autofocus="autofocus" }
@@ -176,7 +177,9 @@ pub async fn fui_textarea(
 ) -> Result {
     let cls = if invalid { "fui-textarea fui-textarea--invalid" } else { "fui-textarea" };
     view! {
-        <textarea class=(cls) name=(name) placeholder=(placeholder) rows=(rows)>(value)</textarea>
+        <textarea class=(cls) name=(name) placeholder=(placeholder) rows=(rows)
+            if !name.is_empty() { id=(name) }
+        >(value)</textarea>
     }
 }
 
@@ -185,7 +188,9 @@ pub async fn fui_textarea(
 pub async fn fui_select(#[default] name: &str, #[default] invalid: bool, child: View) -> Result {
     let cls = if invalid { "fui-select fui-select--invalid" } else { "fui-select" };
     view! {
-        <select class=(cls) name=(name)>(child)</select>
+        <select class=(cls) name=(name)
+            if !name.is_empty() { id=(name) }
+        >(child)</select>
     }
 }
 
@@ -257,6 +262,7 @@ pub async fn fui_card(
 #[component]
 pub async fn fui_form_control(
     #[into] label: String,
+    #[default] for_id: &str,
     #[default] required: bool,
     #[default] description: &str,
     #[default] error: &str,
@@ -264,7 +270,9 @@ pub async fn fui_form_control(
 ) -> Result {
     view! {
         <div class="fui-field">
-            <label class="fui-field__label">
+            <label class="fui-field__label"
+                if !for_id.is_empty() { for=(for_id) }
+            >
                 (label)
                 if required { <span class="fui-field__req">"*"</span> }
             </label>
@@ -407,12 +415,14 @@ async fn gallery_pane(#[default("light")] theme: &str, #[into] label: String) ->
                     <div class="fui-stack">
                         fui_form_control(
                             label: "Full name",
+                            for_id: "name",
                             required: true,
                             description: "As it appears on official documents.",
                             fui_input(name: "name", placeholder: "Jane Cooper")
                         )
                         fui_form_control(
                             label: "Priority",
+                            for_id: "priority",
                             fui_select(
                                 name: "priority",
                                 <option>"Low"</option>
@@ -422,11 +432,13 @@ async fn gallery_pane(#[default("light")] theme: &str, #[into] label: String) ->
                         )
                         fui_form_control(
                             label: "Amount",
+                            for_id: "amount",
                             error: "Enter a value greater than zero.",
                             fui_input(name: "amount", value: "0.00", invalid: true)
                         )
                         fui_form_control(
                             label: "Notes",
+                            for_id: "notes",
                             fui_textarea(name: "notes", placeholder: "Add a note…", rows: "3")
                         )
                         fui_checkbox(label: "Email me a copy of this receipt", checked: true)

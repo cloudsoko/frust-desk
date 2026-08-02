@@ -650,7 +650,7 @@ async fn root_layout(cx: &Cx, slot: Result) -> Result {
     let flash_msg = take_flash(cx);
     view! {
         <!DOCTYPE html>
-        <html>
+        <html lang="en" class="fui-root">
             <head>
                 <title>"Frust Desk"</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -743,11 +743,11 @@ async fn login_form(message: Option<String>) -> Result {
                 }
                 <form method="post" action="/login-submit">
                     frust_ui::fui_form_control(
-                        label: "User", required: true,
+                        label: "User", for_id: "user", required: true,
                         frust_ui::fui_input(name: "user", required: true, autofocus: true)
                     )
                     frust_ui::fui_form_control(
-                        label: "Password", required: true,
+                        label: "Password", for_id: "pass", required: true,
                         frust_ui::fui_input(name: "pass", kind: "password", required: true)
                     )
                     <div class="fui-form-actions">
@@ -901,7 +901,7 @@ async fn home(cx: &Cx) -> Result {
                     </p>
                     <form method="post" action="/new-doctype">
                         frust_ui::fui_form_control(
-                            label: "Name", required: true,
+                            label: "Name", for_id: "name", required: true,
                             description: "lowercase, underscores — e.g. purchase_order",
                             frust_ui::fui_input(name: "name", placeholder: "purchase_order", required: true)
                         )
@@ -1179,6 +1179,7 @@ async fn list_page(cx: &Cx) -> Result {
             if has_month {
                 frust_ui::fui_form_control(
                     label: "Month",
+                    for_id: "month",
                     frust_ui::fui_select(
                         name: "month",
                         <option value="">"All"</option>
@@ -1194,6 +1195,7 @@ async fn list_page(cx: &Cx) -> Result {
             }
             frust_ui::fui_form_control(
                 label: "Field",
+                for_id: "f",
                 frust_ui::fui_select(
                     name: "f",
                     <option value="">"(any)"</option>
@@ -1208,6 +1210,7 @@ async fn list_page(cx: &Cx) -> Result {
             )
             frust_ui::fui_form_control(
                 label: "Equals",
+                for_id: "v",
                 frust_ui::fui_input(name: "v", value: q.value.clone().unwrap_or_default(), placeholder: "value")
             )
             <div style="display:flex; gap: 8px;">
@@ -2213,9 +2216,15 @@ async fn field_row(
     #[default(&[])] link_options: &[String],
 ) -> Result {
     let list_id = format!("opts-{}", field.fieldname);
+    let control_id = if editable && field.fieldtype != "Check" {
+        field.fieldname.as_str()
+    } else {
+        ""
+    };
     view! {
         frust_ui::fui_form_control(
             label: field.label_or_name(),
+            for_id: control_id,
             required: field.required,
             description: if field.fieldtype == "Link" && !link_options.is_empty() {
                 "type to search"
@@ -3355,6 +3364,55 @@ mod tests {
             rest = &after[end..];
         }
         out
+    }
+
+    fn selector_block<'a>(css: &'a str, selector: &str) -> &'a str {
+        let selector_start = css
+            .find(selector)
+            .unwrap_or_else(|| panic!("missing selector {selector}"));
+        let open = css[selector_start..]
+            .find('{')
+            .map(|offset| selector_start + offset)
+            .unwrap_or_else(|| panic!("selector {selector} has no declaration block"));
+        let mut depth = 0usize;
+        for (offset, ch) in css[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &css[open + 1..open + offset];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("selector {selector} has an unterminated declaration block")
+    }
+
+    fn declared_properties(block: &str) -> std::collections::BTreeMap<&str, &str> {
+        block
+            .lines()
+            .filter_map(|line| {
+                let declaration = line.trim().strip_prefix("--")?;
+                let (name, value) = declaration.split_once(':')?;
+                Some((name, value.trim().trim_end_matches(';')))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn preferred_dark_tokens_match_explicit_dark_tokens() {
+        let explicit = declared_properties(selector_block(CSS, "\n[data-theme=\"dark\"] {"));
+        let preferred = declared_properties(selector_block(
+            CSS,
+            "\n  :root:not([data-theme=\"light\"]) {",
+        ));
+        assert!(!explicit.is_empty(), "explicit dark theme defines no tokens");
+        assert_eq!(
+            preferred, explicit,
+            "OS-driven dark mode must redeclare the complete explicit dark token set"
+        );
     }
 
     fn defined_modifiers(css: &str, component: &str) -> std::collections::HashSet<String> {
