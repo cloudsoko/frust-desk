@@ -1,8 +1,8 @@
-//! Frust UI (WO-037) — a Desk-local design system in the **frappe-ui** visual
+//! Frust UI — a Desk-local design system in the **frappe-ui** visual
 //! language, built **Topcoat-native**: every component is a server-rendered
 //! `#[component]` (Rust `view!` + a hand-authored token stylesheet). No Vue, no
 //! SPA runtime, no second CSS toolchain — the Desk stays a pure renderer
-//! (ADR-004) and this layer is ours to own out-of-tree (WO-012).
+//! and this layer is ours to own out-of-tree.
 //!
 //! This module is **additive**: it introduces a `frust-ui` component set, a
 //! `/frust-ui.css` asset route, and one standalone `/ui-gallery` proof route.
@@ -25,7 +25,7 @@ use topcoat::{
 };
 
 /// The design-system stylesheet — tokens (light + dark) + component classes.
-/// Embedded in the binary (Desk's no-external-asset posture, WO-009) and
+/// Embedded in the binary (Desk's no-external-asset posture) and
 /// served at `/frust-ui.css` with `Content-Type: text/css`.
 pub const FRUST_UI_CSS: &str = include_str!("frust_ui.css");
 
@@ -103,10 +103,10 @@ pub async fn fui_button(
     #[default] icon: &str,
     #[default] block: bool,
     #[default] disabled: bool,
-    /// WO-042: `button` | `submit`. The gallery only ever needed a dead
+    /// `button` | `submit`. The gallery only ever needed a dead
     /// button; a real Desk form needs to submit.
     #[default("button")] kind: &str,
-    /// WO-042: when set, renders an `<a>` styled as a button. The Desk's
+    /// When set, renders an `<a>` styled as a button. The Desk's
     /// actions are forms and navigations — never JS click handlers. Owned,
     /// because every real destination is a `format!`ed path.
     #[default(String::new())] #[into] href: String,
@@ -150,8 +150,8 @@ pub async fn fui_input(
     #[default] invalid: bool,
     #[default] disabled: bool,
     #[default] required: bool,
-    /// WO-042: `<datalist>` id — the native typeahead affordance for
-    /// behaviour 3's server-filtered combobox.
+    /// `<datalist>` id — the native typeahead affordance for
+    /// the server-filtered combobox.
     #[default] list: &str,
     #[default] autofocus: bool,
 ) -> Result {
