@@ -105,11 +105,14 @@ pub async fn fui_button(
     #[default] disabled: bool,
     /// `button` | `submit`. The gallery only ever needed a dead
     /// button; a real Desk form needs to submit.
-    #[default("button")] kind: &str,
+    #[default("button")]
+    kind: &str,
     /// When set, renders an `<a>` styled as a button. The Desk's
     /// actions are forms and navigations — never JS click handlers. Owned,
     /// because every real destination is a `format!`ed path.
-    #[default(String::new())] #[into] href: String,
+    #[default(String::new())]
+    #[into]
+    href: String,
     #[default] name: &str,
     #[default] value: &str,
 ) -> Result {
@@ -146,16 +149,23 @@ pub async fn fui_input(
     #[default] name: &str,
     #[default("text")] kind: &str,
     #[default] placeholder: &str,
-    #[default(String::new())] #[into] value: String,
+    #[default(String::new())]
+    #[into]
+    value: String,
     #[default] invalid: bool,
     #[default] disabled: bool,
     #[default] required: bool,
     /// `<datalist>` id — the native typeahead affordance for
     /// the server-filtered combobox.
-    #[default] list: &str,
+    #[default]
+    list: &str,
     #[default] autofocus: bool,
 ) -> Result {
-    let cls = if invalid { "fui-input fui-input--invalid" } else { "fui-input" };
+    let cls = if invalid {
+        "fui-input fui-input--invalid"
+    } else {
+        "fui-input"
+    };
     view! {
         <input class=(cls) type=(kind) name=(name) placeholder=(placeholder) value=(value)
             if !name.is_empty() { id=(name) }
@@ -175,7 +185,11 @@ pub async fn fui_textarea(
     #[default("3")] rows: &str,
     #[default] invalid: bool,
 ) -> Result {
-    let cls = if invalid { "fui-textarea fui-textarea--invalid" } else { "fui-textarea" };
+    let cls = if invalid {
+        "fui-textarea fui-textarea--invalid"
+    } else {
+        "fui-textarea"
+    };
     view! {
         <textarea class=(cls) name=(name) placeholder=(placeholder) rows=(rows)
             if !name.is_empty() { id=(name) }
@@ -186,7 +200,11 @@ pub async fn fui_textarea(
 /// Options are supplied as child `<option>` nodes.
 #[component]
 pub async fn fui_select(#[default] name: &str, #[default] invalid: bool, child: View) -> Result {
-    let cls = if invalid { "fui-select fui-select--invalid" } else { "fui-select" };
+    let cls = if invalid {
+        "fui-select fui-select--invalid"
+    } else {
+        "fui-select"
+    };
     view! {
         <select class=(cls) name=(name)
             if !name.is_empty() { id=(name) }
@@ -318,7 +336,11 @@ pub async fn fui_list_row(
 
 /// `variant`: info | success | warning | danger.
 #[component]
-pub async fn fui_alert(#[default("info")] variant: &str, #[into] title: String, child: View) -> Result {
+pub async fn fui_alert(
+    #[default("info")] variant: &str,
+    #[into] title: String,
+    child: View,
+) -> Result {
     let cls = format!("fui-alert fui-alert--{variant}");
     let glyph = icon(variant);
     view! {
@@ -333,7 +355,11 @@ pub async fn fui_alert(#[default("info")] variant: &str, #[into] title: String, 
 }
 
 #[component]
-pub async fn fui_toast(#[default("success")] variant: &str, #[into] title: String, child: View) -> Result {
+pub async fn fui_toast(
+    #[default("success")] variant: &str,
+    #[into] title: String,
+    child: View,
+) -> Result {
     let cls = format!("fui-alert fui-toast fui-alert--{variant}");
     let glyph = icon(variant);
     view! {
