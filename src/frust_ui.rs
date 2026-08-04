@@ -539,7 +539,7 @@ async fn ui_gallery(cx: &Cx) -> Result {
             <body class="fui-gallery">
                 <div class="fui-gallery__bar">
                     <h1>"Frust UI"</h1>
-                    <span class="fui-gallery__sub">"frappe-ui language · Topcoat-native · WO-037 foundation"</span>
+                    <span class="fui-gallery__sub">"frappe-ui language · Topcoat-native · Frust UI foundation"</span>
                 </div>
                 <div class="fui-gallery__grid">
                     gallery_pane(theme: "light", label: "Light")
