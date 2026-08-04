@@ -1,18 +1,19 @@
-//! Desk v1 (WO-009) — the product's face on the hardened kernel.
+//! Desk v1 — the product's face on the hardened kernel.
 //!
-//! Graduated from the WO-002 proof-harness. The Desk is a pure renderer of
-//! (DocType metadata, record JSON) per ADR-004's headless contract, and a
+//! The Desk is a pure renderer of
+//! (DocType metadata, record JSON) per the headless contract, and a
 //! CLIENT of the kernel REST surface — every byte of data it shows or writes
 //! travels through `frust serve` under the acting user's session token. No
-//! root SQL, no direct SurrealDB, no role headers (WO-009 criterion 1).
+//! root SQL, no direct SurrealDB, no role headers.
 //!
-//! v1 boundaries (standing): list refresh is polling (meta-refresh) until
-//! Topcoat ships push; no spreadsheet grids; dependent-field logic would be
-//! client-side per ADR-007 — the v1 field set has none, so no runtime
-//! signals are used at all. Every interaction is one kernel round-trip.
+//! v1 boundaries (standing): list refresh is SSE-driven — the browser opens a
+//! kernel event stream, with a 60 s meta-refresh tag as the fallback when the
+//! stream can't open; no spreadsheet grids; dependent-field logic is
+//! client-side via per-field runtime signals, so a field enabled or disabled
+//! by another field's value updates without a kernel round-trip.
 
-/// **WO-042:** the Desk's design system, wired into the real pages. Lives
-/// here — Desk-local — and never in the vendored `topcoat` tree: ADR-004 keeps
+/// The Desk's design system, wired into the real pages. Lives
+/// here — Desk-local — and never in the vendored `topcoat` tree, which keeps
 /// the kernel and the framework lean, and the Desk owns its skin.
 mod frust_ui;
 
@@ -53,12 +54,12 @@ mod kernel {
         std::env::var("FRUST_KERNEL").unwrap_or_else(|_| "http://127.0.0.1:8790".into())
     }
 
-    /// **WO-038/WO-041: ONE agent for the whole Desk.**
+    /// **One agent for the whole Desk.**
     ///
     /// This used to build a fresh `ureq::Agent` per call, which is the exact
-    /// defect WO-041 closed in the kernel — a new TCP connection per request,
-    /// so the Desk burned an ephemeral port per kernel round trip. Under the
-    /// very overload this WO is about, that is a second failure source on top
+    /// defect the kernel closed — a new TCP connection per request,
+    /// so the Desk burned an ephemeral port per kernel round trip. Under
+    /// overload, that is a second failure source on top
     /// of the one being measured, and it would have contaminated the
     /// before/after.
     fn agent() -> &'static ureq::Agent {
@@ -81,12 +82,12 @@ mod kernel {
     ///
     /// Default 24: just above the kernel's own worker pool (`Rest::serve`
     /// clamps to 2..=16). Queueing a little keeps the kernel fed; queueing 500
-    /// deep only converts a fast refusal into a slow timeout. WO-035 measured
-    /// the knee at ~50 concurrent, and past it the Desk answered 500 rather
-    /// than waiting — the wrong answer for a UI tier.
+    /// deep only converts a fast refusal into a slow timeout. Load testing
+    /// measured the knee at ~50 concurrent, and past it the Desk answered 500
+    /// rather than waiting — the wrong answer for a UI tier.
     ///
     /// **Configurable because it is also the control.** Setting it absurdly
-    /// high disables shedding and reproduces the pre-WO-038 failure mode on
+    /// high disables shedding and reproduces the earlier overload failure mode on
     /// demand, the same discipline as the `naive-blocking-sse` control: a
     /// guard whose failure mode cannot be reproduced decays into a number
     /// nobody trusts.
@@ -109,7 +110,7 @@ mod kernel {
 
     /// Smoothed kernel round-trip latency is still *reported* (`/admission`),
     /// because "how slow is the kernel right now" is worth an operator's
-    /// glance. It is no longer *shed on*: the WO-038 rewrite proved latency
+    /// glance. It is no longer *shed on*: the admission rewrite proved latency
     /// cannot see the queue (the kernel stayed at 29 ms while Desk pages took
     /// 2 376 ms), and the semaphore is the bound that can. Measuring something
     /// and deciding on it are different jobs.
@@ -201,7 +202,7 @@ mod kernel {
 
     /// **The kernel call, off the async workers.**
     ///
-    /// `spawn_blocking` is the lazy-correct fix: it reuses the WO-041 shared
+    /// `spawn_blocking` is the lazy-correct fix: it reuses the Desk's shared
     /// blocking `Agent` rather than dragging in an async HTTP stack, and its
     /// default 512-thread pool sits comfortably above any sane permit count.
     /// The async worker awaits a join handle instead of sitting on a socket,
@@ -252,7 +253,7 @@ mod kernel {
     }
 
     /// Typed kernel errors -> user-facing words. Engine internals stay out
-    /// of the DOM (ADR-007 hygiene): machine codes are translated, raw DB
+    /// of the DOM: machine codes are translated, raw DB
     /// wording is dropped.
     pub fn friendly(code: u16, body: &serde_json::Value) -> String {
         let err = body.get("error").cloned().unwrap_or_default();
@@ -276,10 +277,12 @@ mod kernel {
             "db" if detail.contains("FRUST:E_DOCSTATUS") => {
                 "That lifecycle transition is not allowed.".into()
             }
-            // WO-031: the workflow judge's refusal. `detail` is already
+            // The workflow judge's refusal. `detail` is already
             // user-facing prose ("'Approve' from 'Draft' requires role
-            // manager; you are 'clerk'"); the FRUST:E_WORKFLOW code stays in
-            // `code`, out of the message (ADR-007 hygiene).
+            // manager; you are 'clerk'"), so this branch returns it verbatim.
+            // The FRUST:E_WORKFLOW machine code never reaches here — `code` is
+            // the HTTP status and `kind` is the discriminant — so engine
+            // internals stay out of the UI.
             "workflow-denied" => detail.to_string(),
             "db" if detail.contains("FRUST:E_IDENTITY_UNRESOLVED") => {
                 "Your identity could not be resolved — contact an administrator.".into()
@@ -315,23 +318,23 @@ fn err500(msg: impl std::fmt::Display) -> topcoat::Error {
     internal_server_error(std::io::Error::other(msg.to_string())).into()
 }
 
-// ── WO-038: shed with intent ────────────────────────────────────────────────
+// ── Shed with intent ────────────────────────────────────────────────────────
 //
-// WO-035's finding: past the ~50-concurrent knee the Desk answered **HTTP 500
+// Past the ~50-concurrent knee the Desk answered **HTTP 500
 // for ~45% of requests at 200 concurrent and ~85% at 500**. A 500 tells a user
 // (and a load balancer, and an on-call engineer) that the system is *broken*.
 // It was not broken — it was busy, propagating downstream saturation upward
 // with the wrong word.
 //
 // This is failure-MODE work, not throughput work. Nothing here makes the Desk
-// faster, and it must not: the ~135 req/s ceiling is the WO-026 database
+// faster, and it must not: the ~135 req/s ceiling is a database
 // conversation, deliberately out of scope. What changes is the answer given
 // when that ceiling is exceeded.
 
 /// A typed, honest "busy" — **503 with `Retry-After`**.
 ///
 /// 503 rather than 429 on purpose: 429 is "*you* sent too many", which the
-/// kernel already returns for WO-013's per-tenant budget. This is "*the
+/// kernel already returns for its per-tenant budget. This is "*the
 /// server* is at capacity", a different fact about a different subject, and
 /// keeping them distinct is what lets an operator tell tenant shaping from
 /// overload without guessing.
@@ -371,7 +374,7 @@ fn admit() -> std::result::Result<kernel::Permit, topcoat::Error> {
 /// A capacity answer must survive the hop.
 fn kernel_status(code: u16, body: &serde_json::Value) -> topcoat::Error {
     match code {
-        // the kernel's typed capacity answers (WO-013 tenant budget, live-sub
+        // the kernel's typed capacity answers (tenant budget, live-sub
         // budget, and any 503 it sheds itself) pass through as capacity
         429 | 503 => Busy::now(),
         // 502 is our own transport failure reaching the kernel — under load
@@ -442,7 +445,7 @@ struct DocType {
     fields: Vec<DocField>,
     #[serde(default)]
     aggregates: Vec<Aggregate>,
-    /// WO-017: Tier-2 client script, metadata like everything else. Its
+    /// Tier-2 client script, metadata like everything else. Its
     /// presence is the ONLY thing that loads the 4 MB engine — see
     /// `form_page`. Absent or blank means a scriptless form, which must
     /// never pay for the engine in requests or bytes.
@@ -464,7 +467,7 @@ struct DocField {
     /// Editable while docstatus = 1 (the Frappe allow-on-submit convention).
     #[serde(default)]
     allow_on_submit: bool,
-    // ── WO-014: declarative client behaviour (metadata, not code) ──
+    // ── Declarative client behaviour (metadata, not code) ──
     #[serde(default)]
     depends_on: Option<Rule>,
     #[serde(default)]
@@ -539,7 +542,7 @@ impl DocField {
     }
 }
 
-// WO-038: these return the Desk's error directly rather than `anyhow`, so a
+// These return the Desk's error directly rather than `anyhow`, so a
 // kernel capacity answer keeps its meaning across the hop instead of being
 // flattened into "something went wrong on the server".
 
@@ -559,7 +562,7 @@ async fn meta_one(s: &Session, name: &str) -> std::result::Result<DocType, topco
     serde_json::from_value(body["doctype"].clone()).map_err(err500)
 }
 
-/// WO-015: how many blank rows a child table offers beyond what exists.
+/// How many blank rows a child table offers beyond what exists.
 /// Rows are pre-rendered (with their signals) and REVEALED by "Add row" —
 /// no client-side DOM creation, so every row is fully reactive from the
 /// first paint. Deliberately small: this is a line editor, not a grid.
@@ -569,7 +572,7 @@ const SPARE_ROWS: usize = 4;
 /// envelope expects. Rows marked removed, or with every value blank, are
 /// dropped — so "remove" and "never filled in" collapse to the same thing.
 ///
-/// The whole array is sent on every save (ADR-008: children are embedded),
+/// The whole array is sent on every save (children are embedded),
 /// which is exactly what lets hooks and the Tier-2 line-differ see the full
 /// document rather than a patch.
 fn collect_rows(
@@ -626,17 +629,17 @@ fn typed_value(f: &DocField, raw: &str) -> serde_json::Value {
 
 // ── Layout ──────────────────────────────────────────────────────────────────
 
-/// **WO-042: the Desk wears Frust UI.**
+/// **The Desk wears Frust UI.**
 ///
-/// The stylesheet and the `fui_*` set are WO-037's; what this does is make
-/// them what `frust serve` actually renders, rather than what a gallery route
+/// The stylesheet and the `fui_*` set are the design system's; what this does
+/// is make them what `frust serve` actually renders, rather than what a gallery route
 /// demonstrates. Everything below is presentation — no handler's data or
 /// behaviour changes.
 ///
 /// Light/dark composes with **no JS**: `frust_ui.css` carries both token sets
 /// and switches on `prefers-color-scheme`, with `data-theme` as an explicit
 /// override. A toggle, if one is ever wanted, is a `data-theme` attribute —
-/// never a runtime (ADR-004).
+/// never a runtime.
 ///
 /// **Inter is a progressive enhancement**, not a dependency: the Google Fonts
 /// link is `media="print" onload=...`-free and simply absent offline, where
@@ -686,10 +689,9 @@ async fn root_layout(cx: &Cx, slot: Result) -> Result {
                     }
                 </nav>
                 <main class="fui-main">
-                    // WO-042: flash messages are the Desk's post-action
+                    // Flash messages are the Desk's post-action
                     // feedback, so they render as a TOAST — auto-dismissing and
-                    // stackable, purely in CSS (see `.fui-toast-stack`). The
-                    // old inline-red-paragraph is gone.
+                    // stackable, purely in CSS (see `.fui-toast-stack`).
                     if let Some(m) = &flash_msg {
                         <div class="fui-toast-stack" role="status" aria-live="polite">
                             frust_ui::fui_toast(variant: flash_variant(m), title: flash_title(m), (m))
@@ -716,7 +718,7 @@ fn flash_variant(msg: &str) -> &'static str {
         // info|success|warning|danger, and `fui-alert--error` is not a class
         // that exists. It compiled and rendered *nearly* right (base alert
         // styling, no colour, and `icon()` fell through to "" so no icon
-        // either) for every error flash in the Desk. Caught by WO-047's guard.
+        // either) for every error flash in the Desk.
         "danger"
     }
 }
@@ -802,11 +804,11 @@ async fn home(cx: &Cx) -> Result {
     let _permit = admit()?;
     let doctypes = meta_list(&s).await?;
     let is_manager = s.role == "manager";
-    // ── WO-056: a workspace, not a schema browser ──
+    // ── A workspace, not a schema browser ──
     //
-    // The survey's first finding was that a person who wants to invoice
-    // someone landed on an alphabetical table of every DocType in the
-    // database — `thing` and `WO-042 order` beside `sales invoice`, child
+    // Without this, a person who wants to invoice
+    // someone lands on an alphabetical table of every DocType in the
+    // database — internal scaffolding beside `sales invoice`, child
     // tables and write-closed rollups offering "New". That is a developer's
     // view of a database, not a place to start work.
     //
@@ -842,7 +844,7 @@ async fn home(cx: &Cx) -> Result {
             <h2 class="fui-page-title" style="font-size:1.1rem;">"All DocTypes"</h2>
             if is_manager {
                 <div class="fui-page-actions">
-                    // WO-042 behaviour 1: CSS-only dialog. The trigger is a
+                    // CSS-only dialog. The trigger is a
                     // link to the modal's id; there is no JS anywhere in it.
                     frust_ui::fui_button(label: "New DocType", variant: "primary", icon: "plus", href: "#new-doctype")
                 </div>
@@ -1000,14 +1002,14 @@ fn list_query(cx: &Cx) -> ListQuery {
 
 const PAGE: u64 = 20;
 
-/// WO-012: focus-scoped live updates (ADR-011).
+/// Visibility-scoped live updates.
 ///
 /// The subscription is opened by the BROWSER against the kernel, carrying the
 /// same session cookie every other request carries — a socket is a session.
-/// It is scoped to FOCUS: opened when the list is visible, closed on
-/// `pagehide`/`visibilitychange`, so the kernel's parked count tracks focused
-/// views rather than open tabs (the writer tax is paid only for views someone
-/// is actually looking at).
+/// It is scoped to VISIBILITY: opened when the page is visible, torn down when
+/// `visibilitychange` reports `document.hidden` (and on `pagehide`), so the
+/// kernel's parked count tracks visible views rather than open tabs (the
+/// writer tax is paid only for views someone is actually looking at).
 ///
 /// A tick carries `{action, id}` only — the client REFETCHES through the
 /// normal read door, so the push path never becomes a second data path with
@@ -1024,10 +1026,10 @@ async fn live_updates(doctype: &str) -> Result {
   var sub = null, timer = null, stopped = false;
   var es = null, sseFailed = false;
 
-  // WO-032: SSE is the transport; polling below is the FALLBACK (REQ-6.5.2).
+  // SSE is the transport; polling below is the FALLBACK.
   // Realtime stays an enhancement — if the stream never establishes, or the
   // browser has no EventSource, the page degrades to the old poll and keeps
-  // working. `onTick` is shared, so the dirty-guard contract (WO-014) is
+  // working. `onTick` is shared, so the dirty-guard contract is
   // identical on both paths.
   function onTick() {{
     if (window.__frustOnTick) window.__frustOnTick(); else location.reload();
@@ -1070,8 +1072,12 @@ async fn live_updates(doctype: &str) -> Result {
       return r.json();
     }}).then(function (b) {{
       if (!b) return;
-      if (!b.alive) {{ close(); return; }}     // reconnect = refetch (ADR-011)
-      // the dirty guard decides what a tick means (WO-014 criterion 5):
+      // dead subscription: close() stops the poll timer and unsubscribes.
+      // recovery is NOT immediate — the list comes back on the next
+      // visibilitychange (start reopens the stream) or the 60 s meta-refresh
+      // fallback, whichever fires first.
+      if (!b.alive) {{ close(); return; }}
+      // the dirty guard decides what a tick means:
       // never stomp in-progress edits; a clean page still refreshes at once
       if (b.events) {{ if (b.events.length) {{ onTick(); }} }}
     }}).catch(function () {{ close(); }});
@@ -1082,8 +1088,8 @@ async fn live_updates(doctype: &str) -> Result {
   }}
   function start() {{ if (sseFailed) open(); else openSse(); }}
   function stop() {{ closeSse(); close(); }}
-  // blur stops the stream (the WO-012 writer-tax rule: pay only for views
-  // someone is looking at); focus resumes on whichever transport is live
+  // becoming hidden stops the stream (the writer-tax rule: pay only for views
+  // someone is looking at); becoming visible resumes whichever transport is live
   document.addEventListener("visibilitychange", function () {{
     if (document.hidden) stop(); else start();
   }});
@@ -1097,7 +1103,7 @@ async fn live_updates(doctype: &str) -> Result {
     }
 }
 
-/// The Tier-0 discipline (ADR-010, WO-007 rule table): period filters are
+/// The Tier-0 discipline: period filters are
 /// EQUALITY on the stored month field — this UI cannot express a raw date
 /// range. Entity filters are equality on Select/Link fields.
 #[page("/list/{doctype_name}")]
@@ -1159,7 +1165,7 @@ async fn list_page(cx: &Cx) -> Result {
     let is_manager = s.role == "manager";
 
     view! {
-        // REQ-6.5.2: polling is the BASE, never removed — a 60 s meta-refresh
+        // Polling is the BASE, never removed — a 60 s meta-refresh
         // works with JS off, over a dead socket, past a budget refusal.
         // Realtime (below) only makes it feel instant when it is available.
         <meta http-equiv="refresh" content="60">
@@ -1236,7 +1242,7 @@ async fn list_page(cx: &Cx) -> Result {
                     if rows.is_empty() {
                         <tr>
                             <td colspan="12">
-                                // WO-056: a first-run user and a user whose
+                                // A first-run user and a user whose
                                 // filter matched nothing need different
                                 // sentences. Telling someone with an empty
                                 // table to check a filter they never set sends
@@ -1311,9 +1317,9 @@ fn docstatus_badge(ds: i64) -> String {
     }
 }
 
-/// WO-042: the lifecycle in colour. Draft is neutral because it is not yet a
+/// The lifecycle in colour. Draft is neutral because it is not yet a
 /// claim about anything; submitted is green because it is; cancelled is red
-/// because ADR-009 makes it terminal.
+/// because it is terminal.
 fn docstatus_color(ds: i64) -> &'static str {
     match ds {
         0 => "gray",
@@ -1325,11 +1331,12 @@ fn docstatus_color(ds: i64) -> &'static str {
 
 /// The month picker's options: last 18 months. Tier-0 by construction —
 /// the UI offers equality buckets, never a range control.
-/// **WO-046 / the money-formatting ruling: pad a stored decimal to scale, for
+/// **The money-formatting ruling: pad a stored decimal to scale, for
 /// DISPLAY only.**
 ///
 /// SurrealDB strips trailing zeros at write, so `37.50` is stored — and read
-/// back — as `37.5`. That is faithful storage and ADR-007 is untouched by it;
+/// back — as `37.5`. That is faithful storage and the no-arithmetic rule is
+/// untouched by it;
 /// what it is not is what a customer should read on an invoice.
 ///
 /// Padding is not arithmetic: it appends zeros to a string. The stored value is
@@ -1341,29 +1348,28 @@ fn docstatus_color(ds: i64) -> &'static str {
 /// not to silently tidy. Money is stored *at* scale, so `1.005` in a 2-place
 /// field means something upstream is wrong, and a display layer that quietly
 /// printed `1.01` would hide it at the exact moment someone could still see it.
-/// **WO-058: exact decimal subtraction, for a DERIVED report column.**
+/// **Exact decimal subtraction, for a DERIVED report column.**
 ///
 /// The AR report exists to answer "what does this customer owe", which is
 /// `charged - paid`. That is a subtraction, and the one thing it must never be
-/// is a float: this project has killed the float-money defect three times
-/// (WO-016 Currency mapped `TYPE float`; WO-021's rounding rules; WO-030's
-/// three-hosts-one-answer), and a financial report quietly doing
+/// is a float: this project has killed the float-money defect repeatedly
+/// (Currency once mapped `TYPE float`; explicit rounding rules; one answer
+/// across every host), and a financial report quietly doing
 /// `300.0 - 120.0` in f64 would reintroduce it at the last mile.
 ///
-/// **Where this computes, stated because WO-058 required it to be:** in the
+/// **Where this computes:** in the
 /// **Desk**, on the decimal *strings* the kernel sent, via scaled integers —
 /// no float type is constructed at any point. Presentation-derived, never
-/// stored, so ADR-007's compare-never-compute is untouched (the report shows a
+/// stored, so the compare-never-compute rule is untouched (the report shows a
 /// number; it writes nothing).
 ///
-/// **The finding this exposes, recorded rather than papered over:** the Desk
+/// **A finding this exposes, recorded rather than papered over:** the Desk
 /// has no shared decimal. `decimal.rs` lives in the kernel and is compiled into
-/// the script sandbox (WO-030), so this is a THIRD implementation of decimal
-/// arithmetic in the codebase, and WO-030's own lesson was that three hosts
+/// the script sandbox, so this is a THIRD implementation of decimal
+/// arithmetic in the codebase, and the standing lesson is that three hosts
 /// must give one answer. This one is deliberately the smallest thing that can
 /// be correct — subtraction at a fixed scale, nothing else — but the honest
-/// long-term home is a kernel report path (or an exposed decimal), and that is
-/// a decision for the PM, not something to settle inside a Desk WO.
+/// long-term home is a kernel report path (or an exposed decimal).
 ///
 /// Returns `None` when either side isn't a plain decimal, so the caller shows
 /// nothing rather than a wrong number.
@@ -1453,7 +1459,7 @@ fn pad_money(raw: &str, scale: usize) -> String {
 ///
 /// **Two, always, today** — DocType metadata carries no `precision`, so there is
 /// nothing per-field to read. Named rather than hidden: a per-field scale (and
-/// a currency symbol) is print-metadata vocabulary for the ADR-014 follow-on,
+/// a currency symbol) is print-metadata vocabulary for a later follow-on,
 /// not something to hardcode per doctype here.
 const MONEY_SCALE: usize = 2;
 
@@ -1513,7 +1519,7 @@ fn recent_months() -> Vec<String> {
 
 // ── Form: new record ────────────────────────────────────────────────────────
 
-/// WO-014: the dynamic form. Every field gets its own VALUE signal, created
+/// The dynamic form. Every field gets its own VALUE signal, created
 /// in a loop from runtime metadata (the dynamic-signals pattern), and the
 /// declarative rules compile into expressions over those signals.
 ///
@@ -1537,7 +1543,7 @@ async fn form_page(cx: &Cx) -> Result {
         dt.fields.iter().map(|_| Signal::new(String::new())).collect();
     let index_of = |fieldname: &str| dt.fields.iter().position(|f| f.fieldname == fieldname);
 
-    // WO-042 behaviour 3: Link candidates for the new-record form, same rung
+    // Link candidates for the new-record form, same rung
     // (b) round trip as the record page.
     let mut link_opts: Vec<(String, Vec<String>)> = Vec::new();
     for f in dt.fields.iter().filter(|f| f.fieldtype == "Link") {
@@ -1562,7 +1568,7 @@ async fn form_page(cx: &Cx) -> Result {
         // declare every field signal to the browser runtime
         for sig in &values { (SignalDeclaration::new(sig)) }
 
-        // WO-017: the lazy-load gate, and the whole of it. A scriptless
+        // The lazy-load gate, and the whole of it. A scriptless
         // DocType emits nothing here, so the form costs exactly the document
         // plus the runtime — the engine is not merely deferred, it is absent.
         if dt.script().is_some() {
@@ -1711,9 +1717,10 @@ async fn field_input<'a>(
 ) -> Result {
     let list_id = format!("opts-{}", field.fieldname);
     view! {
-        // WO-042 behaviour 3 on the dynamic form: the <datalist> is inert
-        // markup, so it composes with the WO-014 signal bindings on the input
-        // below without either knowing about the other.
+        // Combobox on the dynamic form: <datalist> is native declarative
+        // typeahead markup — the fui-input below opts into it via its `list`
+        // attribute, so the browser supplies the suggestions and the reactive
+        // signal bindings compose without either knowing about the other.
         if !link_options.is_empty() {
             <datalist id=(&list_id)>
                 for opt in link_options {
@@ -1765,10 +1772,10 @@ async fn field_input<'a>(
     }
 }
 
-/// WO-015 criterion 6: the per-line diff, computed presentation-side.
+/// The per-line diff, computed presentation-side.
 ///
-/// ADR-008 A4 recorded that embedded children make the changefeed store
-/// whole-document entries, and promised the per-line view as a *computation*
+/// Embedded children make the changefeed store
+/// whole-document entries, so the per-line view is a *computation*
 /// over before/after rather than a storage change. This is that computation,
 /// minimally: pair rows by index, report added / removed / changed fields.
 ///
@@ -1855,7 +1862,7 @@ fn line_diffs(entry: &serde_json::Value) -> Vec<String> {
     out
 }
 
-/// WO-015: the child-table line editor.
+/// The child-table line editor.
 ///
 /// Rows render from the CHILD DocType's own metadata (Tier-1: a child type
 /// created at runtime gets an editor with no recompile). Existing rows plus
@@ -1864,7 +1871,7 @@ fn line_diffs(entry: &serde_json::Value) -> Vec<String> {
 /// adding a row costs no DOM creation and no round-trip.
 ///
 /// Deliberately NOT a grid: no per-cell reactivity, no bulk edit, no ranges.
-/// That boundary is ADR-004 revisit-trigger #1 and it stays armed.
+/// That boundary is a deliberate revisit trigger and it stays armed.
 #[component]
 async fn line_editor<'a>(
     parent_field: &'a str,
@@ -1963,7 +1970,7 @@ async fn line_cells<'a>(
     }
 }
 
-/// WO-014 criterion 5: the dirty-field guard.
+/// The dirty-field guard.
 ///
 /// **Reconciliation rule:** a live tick may never discard un-saved input.
 /// While the form is dirty, the realtime reload is suppressed and the tick
@@ -2002,9 +2009,9 @@ async fn dirty_guard() -> Result {
 }
 
 /// Serves the vendored runtime script. Embedded at build time, so the Desk
-/// stays a single binary with no asset bundle (WO-009 posture) while still
+/// stays a single binary with no asset bundle while still
 /// getting real signals.
-/// **WO-038: admission is an attributable signal, not a mystery.**
+/// **Admission is an attributable signal, not a mystery.**
 ///
 /// The house rule is that silent misbehaviour is the enemy, and that applies
 /// to overload too: an operator must be able to see *"the Desk shed 412
@@ -2028,11 +2035,11 @@ async fn runtime_js() -> Result<Js<&'static str>> {
     )))
 }
 
-// ── WO-017: the Tier-2 script engine, served lazily ─────────────────────────
+// ── The Tier-2 script engine, served lazily ─────────────────────────────────
 //
 // The engine is the SAME `script_engine.wasm` the kernel runs under wasmtime,
-// put through `jco transpile` — one artifact, two hosts (ADR-007). Assets are
-// embedded in the binary (the WO-009 no-asset-bundle posture holds); "lazy"
+// put through `jco transpile` — one artifact, two hosts. Assets are
+// embedded in the binary (the no-asset-bundle posture holds); "lazy"
 // is a statement about REQUESTS, not about binary size. Nothing below is
 // fetched unless a DocType actually carries a script.
 
@@ -2043,7 +2050,7 @@ struct EngineFile(String);
 /// they are rewritten to sibling URLs on the way out — this keeps the served
 /// tree flat and, more importantly, means the page needs no import map (an
 /// import map would have to survive `view!`'s HTML escaping, which is a trap
-/// we already paid for once in WO-014).
+/// this codebase already paid for once).
 #[route(GET "/engine/{engine_file}")]
 async fn engine_asset(cx: &Cx) -> Result<Response> {
     let file = path_param::<EngineFile>(cx)?.to_string();
@@ -2091,7 +2098,7 @@ async fn engine_boot(cx: &Cx) -> Result<Js<String>> {
     };
 
     // fieldname -> WIT variant tag, so the doc crosses the boundary typed.
-    // Currency is `decimal-v`: money stays a string on both sides (REQ-6.2.1).
+    // Currency is `decimal-v`: money stays a string on both sides.
     let kinds: serde_json::Map<String, serde_json::Value> = dt
         .fields
         .iter()
@@ -2116,14 +2123,14 @@ async fn engine_boot(cx: &Cx) -> Result<Js<String>> {
     )))
 }
 
-// ── WO-017 item 4: client-script authoring (manager tier) ───────────────────
+// ── Client-script authoring (manager tier) ──────────────────────────────────
 //
 // The Frappe client-script UX with real isolation underneath: attach a script
 // to a DocType through the UI, and the NEXT form load runs it — through the
-// same lazy-load gate (item 1), under the same watchdog (item 2), behind the
-// same decimal catch (item 3). The Desk renders role-appropriately, but the
+// same lazy-load gate, under the same watchdog, behind the
+// same decimal catch. The Desk renders role-appropriately, but the
 // KERNEL's require_manager on the script endpoint is the enforcement; hiding
-// the page is courtesy, not security (WO-008 posture).
+// the page is courtesy, not security.
 
 #[page("/script/{doctype_name}")]
 async fn script_page(cx: &Cx) -> Result {
@@ -2203,7 +2210,7 @@ async fn script_save(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Resu
     Ok(see_other(&format!("/script/{name}?saved=1")))
 }
 
-/// **WO-042: one field, rendered in Frust UI.**
+/// **One field, rendered in Frust UI.**
 ///
 /// `link_options` carries the candidate values for a `Link` field, fetched from
 /// the kernel by the page handler — **behaviour 3, rung (b)**. See
@@ -2299,8 +2306,8 @@ const LINK_OPTION_CAP: u64 = 50;
 ///
 /// Rung (a) is impossible here: CSS cannot filter on typed text. Rung (c) — the
 /// six-verb bridge — would trade one round trip for a client runtime the Desk
-/// does not otherwise need, so the ranked order stops at (b), exactly where
-/// WO-037 predicted it would for link fields.
+/// does not otherwise need, so the ranked order stops at (b), the right rung
+/// for link fields.
 ///
 /// A failure returns no options, which degrades to a plain text input. That is
 /// the right failure: the field still submits, it just loses the affordance.
@@ -2416,7 +2423,7 @@ async fn doc_page(cx: &Cx) -> Result {
     };
     let is_manager = s.role == "manager";
 
-    // ── WO-031: workflow transition buttons ──
+    // ── Workflow transition buttons ──
     // Ask the kernel what THIS user's role may do from THIS document's state.
     // The kernel computes it from `available(state, role)` — the same data its
     // judge uses — so a button that renders is a transition that will be
@@ -2437,7 +2444,7 @@ async fn doc_page(cx: &Cx) -> Result {
     // The badge shows the workflow state when there is one, else the docstatus.
     let state = if under_workflow { wf_state.clone() } else { ds_state };
 
-    // ── WO-015: child tables ──
+    // ── Child tables ──
     // Each Table field names its child DocType in `options`; the child's own
     // metadata drives the row columns, so a child type created at runtime
     // gets a working editor with no recompile.
@@ -2452,7 +2459,7 @@ async fn doc_page(cx: &Cx) -> Result {
         let rows = row[&f.fieldname].as_array().cloned().unwrap_or_default();
         row_arrays.push((f.fieldname.clone(), rows));
     }
-    // ── WO-042 behaviour 3: Link options, fetched from the kernel ──
+    // ── Link options, fetched from the kernel ──
     // One read per Link field on this document. Done here rather than inside
     // the field component because a component that reaches for the network is
     // a component you cannot render in a test.
@@ -2464,7 +2471,7 @@ async fn doc_page(cx: &Cx) -> Result {
     }
 
     // one reveal counter per table, and one money signal per rendered row
-    // (row-scoped, so WO-014 rules can apply per line — criterion 3)
+    // (row-scoped, so declarative rules can apply per line)
     let table_shown: Vec<Signal<f64>> =
         child_meta.iter().map(|_| Signal::new(0.0)).collect();
     let max_rows = row_arrays.iter().map(|(_, r)| r.len()).max().unwrap_or(0) + SPARE_ROWS;
@@ -2486,7 +2493,7 @@ async fn doc_page(cx: &Cx) -> Result {
             }
             <div class="fui-page-actions">
                 frust_ui::fui_button(label: "← List", variant: "ghost", href: format!("/list/{name}"))
-                // WO-046: the way to the document view. Every role gets it —
+                // The way to the document view. Every role gets it —
                 // it reads through the same door under the same session, so it
                 // can show nothing this page could not already show.
                 frust_ui::fui_button(label: "Print", variant: "secondary", href: format!("/print/{name}/{key}"))
@@ -2501,15 +2508,15 @@ async fn doc_page(cx: &Cx) -> Result {
                 "This document is cancelled. It is permanently read-only."
             )
         }
-        // WO-014 criterion 5 — the reconciliation rule, stated:
+        // The reconciliation rule, stated:
         // a realtime tick NEVER overwrites a form the user is editing. The
         // page marks itself dirty on first input; the live script's reload
         // is suppressed while dirty, and the tick surfaces as a banner the
         // user dismisses by saving or reloading. Staleness is visible;
-        // typing is never stomped (the classic Frappe annoyance, ruled).
+        // typing is never stomped (the classic Frappe annoyance).
         dirty_guard()
         <script type="module" src="/runtime.js"></script>
-        // one reveal-counter signal per child table (WO-015)
+        // one reveal-counter signal per child table
         for sig in &table_shown { (SignalDeclaration::new(sig)) }
         for sig in &line_money { (SignalDeclaration::new(sig)) }
         <form id="doc-form" method="post" action=(format!("/save/{name}/{key}"))>
@@ -2522,7 +2529,10 @@ async fn doc_page(cx: &Cx) -> Result {
                                 .find(|(fname, _)| fname == &field.fieldname)
                                 .map(|(_, r)| r.as_slice())
                                 .unwrap_or(&[]);
-                            let shown = &table_shown[0];
+                            let shown = &table_shown[child_meta
+                                .iter()
+                                .position(|(fname, _)| fname == &field.fieldname)
+                                .unwrap_or(0)];
                             line_editor(
                                 parent_field: &field.fieldname,
                                 child: child,
@@ -2567,14 +2577,14 @@ async fn doc_page(cx: &Cx) -> Result {
                     frust_ui::fui_button(label: "Submit", variant: "primary", kind: "submit", name: "action", value: "submit")
                 }
                 if can_cancel {
-                    // A cancel is terminal under ADR-009's lattice, so it gets
+                    // A cancel is terminal under the lattice, so it gets
                     // the destructive variant — the affordance should look like
                     // what it does.
                     frust_ui::fui_button(label: "Cancel document", variant: "danger", kind: "submit", name: "action", value: "cancel")
                 }
             </div>
         </form>
-        // WO-031: the workflow's transition buttons, in their own form so a
+        // The workflow's transition buttons, in their own form so a
         // transition carries ONLY the action (the kernel judges on action +
         // current state, never on edited fields — approving is not saving).
         // These are the sole lifecycle affordance under a workflow; the raw
@@ -2598,22 +2608,22 @@ async fn doc_page(cx: &Cx) -> Result {
     }
 }
 
-/// **WO-046: the document view — the artifact WO-045 found missing.**
+/// **The document view — the artifact browser print was missing.**
 ///
-/// The spike's finding was that browser print does not lack an engine, it lacks
+/// The finding was that browser print does not lack an engine, it lacks
 /// a *document*: the record page is an editing form, and print CSS can make a
 /// form tidy but it cannot make it an invoice. A printed form says `customer *`
 /// and `Total: 15 (computed on save)` to a customer no matter how clean the
 /// stylesheet is.
 ///
 /// This is that document, and it is **generic** — DocType metadata plus record
-/// JSON, exactly the ADR-004 contract the form already honours. No per-doctype
+/// JSON, exactly the headless contract the form already honours. No per-doctype
 /// code exists here and none may be added; a new DocType created at runtime
 /// gets a printable document with no recompile, which is the same claim the
 /// list and the form already make.
 ///
 /// It is also **the same HTML a PDF engine would consume**, which is the
-/// one-dialect payoff ADR-014 banked when it deferred the engine.
+/// one-dialect payoff banked when the engine was deferred.
 #[page("/print/{doctype_name}/{record_key}")]
 async fn print_page(cx: &Cx) -> Result {
     let s = require_session(cx)?;
@@ -2741,7 +2751,7 @@ async fn print_page(cx: &Cx) -> Result {
 
             <footer class="fui-doc__foot">
                 // Screen-only: the affordance to leave. `.fui-btn` is already
-                // hidden by the WO-045 print block, so paper never shows it.
+                // hidden by the print block, so paper never shows it.
                 frust_ui::fui_button(label: "← Back to record", variant: "ghost",
                     href: format!("/doc/{name}/{key}"))
             </footer>
@@ -2776,9 +2786,9 @@ async fn save_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<
         }
         _ => {
             for f in &dt.fields {
-                // WO-015: a child table submits as the WHOLE embedded array,
+                // A child table submits as the WHOLE embedded array,
                 // so hooks and the Tier-2 line-differ see the full document
-                // rather than a patch (ADR-008: children are embedded).
+                // rather than a patch (children are embedded).
                 if f.fieldtype == "Table" {
                     let Some(child_name) = f.options.first() else { continue };
                     let Ok(child) = meta_one(&s, child_name).await else { continue };
@@ -2804,8 +2814,8 @@ async fn save_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<
     Ok(see_other(&format!("/doc/{name}/{key}")))
 }
 
-/// WO-031: drive a workflow transition. A UI affordance over the proven
-/// `/transition` endpoint (WO-018) — the button carries an action, the kernel
+/// Drive a workflow transition. A UI affordance over the proven
+/// `/transition` endpoint — the button carries an action, the kernel
 /// judges it and the lattice EVENT backstops. The Desk reimplements no
 /// transition logic; it posts the action and surfaces the typed refusal.
 #[route(POST "/transition/{doctype_name}/{record_key}")]
@@ -2832,10 +2842,10 @@ async fn transition_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> R
     Ok(see_other(&format!("/doc/{name}/{key}")))
 }
 
-// ── Live updates: session-scoped proxy to the kernel (WO-012) ───────────────
+// ── Live updates: session-scoped proxy to the kernel ────────────────────────
 // The browser never holds a kernel token. These routes attach the session's
 // bearer server-side, so a live subscription is exactly as authenticated as
-// every other call — a socket is a session (kernel owns sessions, 🚫 bucket).
+// every other call — a socket is a session (the kernel owns sessions).
 
 #[path_param(error = bad_request("bad name"))]
 struct LiveName(String);
@@ -2865,7 +2875,7 @@ async fn live_events(cx: &Cx) -> Result<String> {
     Ok(body.to_string())
 }
 
-/// WO-032: the push transport — one long-lived SSE stream per focused view,
+/// The push transport — one long-lived SSE stream per focused view,
 /// replacing the browser's 3 s poll.
 ///
 /// **Why this does not pin a thread per subscriber (criterion 2).** The
@@ -2879,9 +2889,9 @@ async fn live_events(cx: &Cx) -> Result<String> {
 /// **Honest bound:** SSE removes *browser* polling, not Desk→kernel polling.
 /// The kernel realtime API is drain-based, so the Desk still polls it on the
 /// user's behalf; eliminating that needs a streaming kernel endpoint, which is
-/// a kernel change and out of this WO's boundary (reported, not built).
+/// a kernel change and out of scope here (reported, not built).
 ///
-/// Ticks carry `{action, id}` only (ADR-011) — the browser refetches through
+/// Ticks carry `{action, id}` only — the browser refetches through
 /// the read door, so the push path never becomes a second data path with its
 /// own permission story. The subscription runs under the SUBSCRIBER'S session,
 /// so a clerk's stream carries only a clerk's events.
@@ -2893,14 +2903,14 @@ async fn live_sse(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use
     let (code, body) = kernel::call_async(Some(&s.token), &format!("/subscribe/{table}"), &serde_json::json!({})).await;
     if code != 200 {
         // budget refusal (429) / realtime disabled: refuse the stream so the
-        // client falls back to polling (REQ-6.5.2) rather than holding a
+        // client falls back to polling rather than holding a
         // connection that will never tick.
         return Err(topcoat::router::error::bad_request("live unavailable").into());
     }
     let sub = body["sub"].as_str().unwrap_or_default().to_string();
 
     // The guard unsubscribes when the stream is dropped (browser closed the
-    // connection), keeping the WO-012 per-table budget honest instead of
+    // connection), keeping the per-table budget honest instead of
     // waiting out the kernel's 30 s idle reaper.
     let guard = SubGuard { token: s.token.clone(), sub: sub.clone() };
 
@@ -2911,7 +2921,7 @@ async fn live_sse(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use
             // ASYNC sleep: the worker thread is released between drains.
             #[cfg(not(feature = "naive-blocking-sse"))]
             tokio::time::sleep(std::time::Duration::from_millis(LIVE_DRAIN_MS)).await;
-            // WO-032 CONTROL (never shipped): the naive shape. Blocks the tokio
+            // CONTROL (never shipped): the naive shape. Blocks the tokio
             // worker for the subscription's lifetime — build with
             // `--features naive-blocking-sse` to reproduce the stall this
             // design avoids. Exists so the measurement can be shown to FAIL.
@@ -2967,7 +2977,7 @@ async fn reports_index(cx: &Cx) -> Result {
     let s = require_session(cx)?;
     let _permit = admit()?;
     let doctypes = meta_list(&s).await?;
-    // **WO-058: one entry per ROLLUP, not per declaration.**
+    // **One entry per ROLLUP, not per declaration.**
     //
     // A rollup fed by two sources (invoice -> charged, payment -> paid)
     // declared two aggregates, and this list emitted one row each — so
@@ -3015,7 +3025,7 @@ async fn report_page(cx: &Cx) -> Result {
     let _permit = admit()?;
     let rollup = path_param::<RollupName>(cx)?.to_string();
     let doctypes = meta_list(&s).await?;
-    // **WO-058: a rollup is fed by EVERY declaration that targets it.**
+    // **A rollup is fed by EVERY declaration that targets it.**
     //
     // This used to `.find()` the first one, so a rollup fed by two doctypes
     // rendered one of them: `paid` showed and `charged` was absent, while the
@@ -3063,7 +3073,9 @@ async fn report_page(cx: &Cx) -> Result {
     }
     let rows = out["rows"].as_array().cloned().unwrap_or_default();
 
-    // Tier-2: staleness is data, shown, never hidden (ADR-010)
+    // Tier-2: staleness is shown when the /lag endpoint answers (200); if it
+    // returns anything else, lag is None and the staleness line is silently
+    // omitted below.
     let lag = if is_tier2 {
         let (lc, lb) = kernel::call_async(Some(&s.token), &format!("/lag/{rollup}"), &serde_json::json!({})).await;
         if lc == 200 { Some(lb) } else { None }
@@ -3113,7 +3125,7 @@ async fn report_page(cx: &Cx) -> Result {
                     <td>(row["k"].as_str().unwrap_or("?").to_string())</td>
                     <td style="text-align: right;">(cell(&row["n"]))</td>
                     for m in &metric_names {
-                        // money padded per the WO-046 display ruling: the
+                        // money padded per the display ruling: the
                         // store drops trailing zeros, so `300` is shown `300.00`
                         <td style="text-align: right;">(pad_money(&cell(&row[m]), MONEY_SCALE))</td>
                     }
@@ -3155,10 +3167,9 @@ async fn audit_page(cx: &Cx) -> Result {
     view! {
         <h1>"Audit trail — " (&name) ":" (&key)</h1>
         <p><small style="color:#666;">
-            "Storage-layer history from the table changefeed (REQ-3.2.1) — "
+            "Storage-layer history from the table changefeed — "
             (entries.len()) " of " (out["total"].as_u64().unwrap_or(0)) " feed entries touch this record."
         </small></p>
-        // WO-015 criterion 6 — ADR-008 A4's promissory note, cashed.
         // The changefeed stores WHOLE-DOCUMENT entries, so a per-line diff
         // is a PRESENTATION-layer computation over the before/after arrays.
         // Here it is: the audit UI stops owing that answer.
@@ -3258,15 +3269,13 @@ mod tests {
         }
     }
 
-    // ── WO-047 item 2: the CSS-seam guard ───────────────────────────────────
+    // ── The CSS-seam guard ──────────────────────────────────────────────────
     //
     // The Rust->CSS seam has NO type system: a class name or custom property
     // that does not exist compiles, renders *nearly* right, and says nothing.
-    // It has now caught its author three times — `--fui-space-*`/`--fui-font-sans`
-    // (WO-042, first render in Times New Roman), `--fui-outline` (WO-046), and
-    // `fui-alert--error` (this WO: every error flash in the Desk drew with no
-    // colour and no icon). WO-042's own caveat set the promotion criterion —
-    // "grep referenced-vs-defined if it recurs" — so it is wired in here where
+    // It has bitten repeatedly — an invented spacing/font token once drew the
+    // first paint in Times New Roman, and `fui-alert--error` drew every error
+    // flash with no colour and no icon. So the check is wired in here where
     // it cannot be skipped, the same move the surql/tenancy monopolies made.
 
     const CSS: &str = include_str!("frust_ui.css");
@@ -3286,7 +3295,7 @@ mod tests {
         assert!(
             missing.is_empty(),
             "custom properties referenced but never defined: {missing:?}\n\
-             (a `var(--typo)` silently falls back to nothing — this is the WO-042 class)"
+             (a `var(--typo)` silently falls back to nothing — the Rust->CSS seam has no type system)"
         );
     }
 
@@ -3300,7 +3309,7 @@ mod tests {
     ///
     /// **Bound to the component on purpose.** The first cut of this guard
     /// accepted a value if ANY component defined it, and that made it
-    /// decorative: WO-042's real bug was `fui-btn--solid`, and `.fui-badge--solid`
+    /// decorative: the real bug was `fui-btn--solid`, and `.fui-badge--solid`
     /// exists — so the permissive version passed the planted bug. A guard that
     /// cannot fail on the defect it was written for is worse than none.
     #[test]
@@ -3310,7 +3319,7 @@ mod tests {
         // renders `.fui-btn--*`), so the pairing is stated explicitly. Deriving
         // it — `component.replace('-', "_")` — produced `fui_btn`, which matches
         // no call site, so the button half silently checked NOTHING and passed
-        // the planted bug. Found only by planting it (WO-032's rule).
+        // the planted bug. Found only by planting it.
         for (component, fn_name, param) in [
             ("fui-btn", "fui_button", "variant"),
             ("fui-alert", "fui_alert", "variant"),
@@ -3333,7 +3342,7 @@ mod tests {
         assert!(
             bad.is_empty(),
             "component variants passed from Rust with no matching CSS class:\n  {}\n\
-             (these COMPILE and render nearly-right — `fui-alert--error` shipped for two WOs, \
+             (these COMPILE and render nearly-right — `fui-alert--error` shipped undetected, \
              drawing every Desk error with no colour and no icon)",
             bad.join("\n  ")
         );
