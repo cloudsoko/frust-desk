@@ -6,10 +6,11 @@
 //! travels through `frust serve` under the acting user's session token. No
 //! root SQL, no direct SurrealDB, no role headers.
 //!
-//! v1 boundaries (standing): list refresh is polling (meta-refresh) until
-//! Topcoat ships push; no spreadsheet grids; dependent-field logic would be
-//! client-side — the v1 field set has none, so no runtime
-//! signals are used at all. Every interaction is one kernel round-trip.
+//! v1 boundaries (standing): list refresh is SSE-driven — the browser opens a
+//! kernel event stream, with a 60 s meta-refresh tag as the fallback when the
+//! stream can't open; no spreadsheet grids; dependent-field logic is
+//! client-side via per-field runtime signals, so a field enabled or disabled
+//! by another field's value updates without a kernel round-trip.
 
 /// The Desk's design system, wired into the real pages. Lives
 /// here — Desk-local — and never in the vendored `topcoat` tree, which keeps
@@ -278,8 +279,10 @@ mod kernel {
             }
             // The workflow judge's refusal. `detail` is already
             // user-facing prose ("'Approve' from 'Draft' requires role
-            // manager; you are 'clerk'"); the FRUST:E_WORKFLOW code stays in
-            // `code`, out of the message — engine internals stay out of the UI.
+            // manager; you are 'clerk'"), so this branch returns it verbatim.
+            // The FRUST:E_WORKFLOW machine code never reaches here — `code` is
+            // the HTTP status and `kind` is the discriminant — so engine
+            // internals stay out of the UI.
             "workflow-denied" => detail.to_string(),
             "db" if detail.contains("FRUST:E_IDENTITY_UNRESOLVED") => {
                 "Your identity could not be resolved — contact an administrator.".into()
@@ -999,14 +1002,14 @@ fn list_query(cx: &Cx) -> ListQuery {
 
 const PAGE: u64 = 20;
 
-/// Focus-scoped live updates.
+/// Visibility-scoped live updates.
 ///
 /// The subscription is opened by the BROWSER against the kernel, carrying the
 /// same session cookie every other request carries — a socket is a session.
-/// It is scoped to FOCUS: opened when the list is visible, closed on
-/// `pagehide`/`visibilitychange`, so the kernel's parked count tracks focused
-/// views rather than open tabs (the writer tax is paid only for views someone
-/// is actually looking at).
+/// It is scoped to VISIBILITY: opened when the page is visible, torn down when
+/// `visibilitychange` reports `document.hidden` (and on `pagehide`), so the
+/// kernel's parked count tracks visible views rather than open tabs (the
+/// writer tax is paid only for views someone is actually looking at).
 ///
 /// A tick carries `{action, id}` only — the client REFETCHES through the
 /// normal read door, so the push path never becomes a second data path with
@@ -1069,7 +1072,11 @@ async fn live_updates(doctype: &str) -> Result {
       return r.json();
     }}).then(function (b) {{
       if (!b) return;
-      if (!b.alive) {{ close(); return; }}     // reconnect = refetch
+      // dead subscription: close() stops the poll timer and unsubscribes.
+      // recovery is NOT immediate — the list comes back on the next
+      // visibilitychange (start reopens the stream) or the 60 s meta-refresh
+      // fallback, whichever fires first.
+      if (!b.alive) {{ close(); return; }}
       // the dirty guard decides what a tick means:
       // never stomp in-progress edits; a clean page still refreshes at once
       if (b.events) {{ if (b.events.length) {{ onTick(); }} }}
@@ -1081,8 +1088,8 @@ async fn live_updates(doctype: &str) -> Result {
   }}
   function start() {{ if (sseFailed) open(); else openSse(); }}
   function stop() {{ closeSse(); close(); }}
-  // blur stops the stream (the writer-tax rule: pay only for views
-  // someone is looking at); focus resumes on whichever transport is live
+  // becoming hidden stops the stream (the writer-tax rule: pay only for views
+  // someone is looking at); becoming visible resumes whichever transport is live
   document.addEventListener("visibilitychange", function () {{
     if (document.hidden) stop(); else start();
   }});
@@ -1710,9 +1717,10 @@ async fn field_input<'a>(
 ) -> Result {
     let list_id = format!("opts-{}", field.fieldname);
     view! {
-        // Combobox on the dynamic form: the <datalist> is inert
-        // markup, so it composes with the reactive signal bindings on the input
-        // below without either knowing about the other.
+        // Combobox on the dynamic form: <datalist> is native declarative
+        // typeahead markup — the fui-input below opts into it via its `list`
+        // attribute, so the browser supplies the suggestions and the reactive
+        // signal bindings compose without either knowing about the other.
         if !link_options.is_empty() {
             <datalist id=(&list_id)>
                 for opt in link_options {
@@ -2521,7 +2529,10 @@ async fn doc_page(cx: &Cx) -> Result {
                                 .find(|(fname, _)| fname == &field.fieldname)
                                 .map(|(_, r)| r.as_slice())
                                 .unwrap_or(&[]);
-                            let shown = &table_shown[0];
+                            let shown = &table_shown[child_meta
+                                .iter()
+                                .position(|(fname, _)| fname == &field.fieldname)
+                                .unwrap_or(0)];
                             line_editor(
                                 parent_field: &field.fieldname,
                                 child: child,
@@ -3062,7 +3073,9 @@ async fn report_page(cx: &Cx) -> Result {
     }
     let rows = out["rows"].as_array().cloned().unwrap_or_default();
 
-    // Tier-2: staleness is data, shown, never hidden
+    // Tier-2: staleness is shown when the /lag endpoint answers (200); if it
+    // returns anything else, lag is None and the staleness line is silently
+    // omitted below.
     let lag = if is_tier2 {
         let (lc, lb) = kernel::call_async(Some(&s.token), &format!("/lag/{rollup}"), &serde_json::json!({})).await;
         if lc == 200 { Some(lb) } else { None }
