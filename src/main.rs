@@ -2681,6 +2681,12 @@ async fn save_single(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Resu
             doc.insert(f.fieldname.clone(), serde_json::Value::Array(rows));
         } else if let Some((_, raw)) = fields.iter().find(|(k, _)| k == &f.fieldname) {
             doc.insert(f.fieldname.clone(), typed_value(f, raw));
+        } else if f.fieldtype == "Check" {
+            // An unchecked checkbox is absent from HTML form data. Only for
+            // Check fields does absent mean an explicit false — otherwise the
+            // box could never be saved unchecked. Absent non-Check inputs keep
+            // their omit semantics.
+            doc.insert(f.fieldname.clone(), typed_value(f, ""));
         }
     }
 
