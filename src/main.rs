@@ -24,15 +24,24 @@ use topcoat::{
     context::Cx,
     cookie::{Cookie, Cookies, RouterBuilderCookieExt, cookies},
     router::{
-        IntoResponse, Response, Router, RouterBuilderDiscoverExt, layout, page, path_param,
-        query_params, route,
+        IntoResponse,
+        Response,
+        Router,
+        RouterBuilderDiscoverExt,
         // v0.5.0 namespaced the content types under `content::` (the router
         // root no longer globs them out); `Wasm` is still ours.
         content::{
             Form, Js, Wasm,
             sse::{Event, KeepAlive, Sse},
         },
-        error::{SeeOther, bad_request, internal_server_error, redirect, see_other, service_unavailable},
+        error::{
+            SeeOther, bad_request, internal_server_error, redirect, see_other, service_unavailable,
+        },
+        layout,
+        page,
+        path_param,
+        query_params,
+        route,
     },
     runtime::{Decimal, Signal, SignalDeclaration},
     view::{component, view},
@@ -42,7 +51,9 @@ use topcoat::{
 async fn main() {
     // no asset bundle, no client runtime: Desk v1 is fully server-rendered
     // (zero signals/shards — the v1 field set has no dependent fields)
-    topcoat::start(Router::builder().cookies().discover().build()).await.unwrap();
+    topcoat::start(Router::builder().cookies().discover().build())
+        .await
+        .unwrap();
 }
 
 // ── Kernel client ───────────────────────────────────────────────────────────
@@ -120,7 +131,11 @@ mod kernel {
         // query cannot trip the shed, fast enough to react within a second of
         // real saturation.
         let prev = LATENCY_US.load(Ordering::Relaxed);
-        let next = if prev == 0 { us } else { prev - prev / 8 + us / 8 };
+        let next = if prev == 0 {
+            us
+        } else {
+            prev - prev / 8 + us / 8
+        };
         LATENCY_US.store(next, Ordering::Relaxed);
     }
 
@@ -224,13 +239,49 @@ mod kernel {
         }
     }
 
+    pub async fn get_async(token: Option<&str>, route: &str) -> (u16, serde_json::Value) {
+        let (token, route) = (token.map(str::to_string), route.to_string());
+        match tokio::task::spawn_blocking(move || get(token.as_deref(), &route)).await {
+            Ok(out) => out,
+            Err(e) => (
+                502,
+                serde_json::json!({ "error": { "kind": "transport", "detail": e.to_string() } }),
+            ),
+        }
+    }
+
+    pub fn get(token: Option<&str>, route: &str) -> (u16, serde_json::Value) {
+        let started = std::time::Instant::now();
+        let mut req = agent().get(format!("{}{}", base(), route));
+        if let Some(t) = token {
+            req = req.header("Authorization", &format!("Bearer {t}"));
+        }
+        let out = match req.call() {
+            Ok(mut r) => {
+                let code = r.status().as_u16();
+                let parsed = r.body_mut().read_json().unwrap_or(serde_json::json!({}));
+                (code, parsed)
+            }
+            Err(e) => (
+                502,
+                serde_json::json!({ "error": { "kind": "transport", "detail": e.to_string() } }),
+            ),
+        };
+        record_latency(started.elapsed().as_micros() as u64);
+        out
+    }
+
     /// One kernel call, blocking. Non-2xx comes back as Ok((code, body)) so
     /// callers can render typed errors as user-facing messages.
     ///
     /// Still used directly from the few genuinely synchronous contexts (a
     /// `Drop` impl cannot await); every request path goes through
     /// [`call_async`].
-    pub fn call(token: Option<&str>, route: &str, body: &serde_json::Value) -> (u16, serde_json::Value) {
+    pub fn call(
+        token: Option<&str>,
+        route: &str,
+        body: &serde_json::Value,
+    ) -> (u16, serde_json::Value) {
         let started = std::time::Instant::now();
         let mut req = agent().post(format!("{}{}", base(), route));
         if let Some(t) = token {
@@ -242,7 +293,10 @@ mod kernel {
                 let parsed = r.body_mut().read_json().unwrap_or(serde_json::json!({}));
                 (code, parsed)
             }
-            Err(e) => (502, serde_json::json!({ "error": { "kind": "transport", "detail": e.to_string() } })),
+            Err(e) => (
+                502,
+                serde_json::json!({ "error": { "kind": "transport", "detail": e.to_string() } }),
+            ),
         };
         // feed the controller whether the call succeeded or failed: a call
         // that took four seconds and then errored is the strongest possible
@@ -262,10 +316,16 @@ mod kernel {
         match kind {
             "hook-rejected" => format!(
                 "Rejected by a validation rule: {}",
-                err.get("message").and_then(|m| m.as_str()).unwrap_or("the document was not accepted")
+                err.get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("the document was not accepted")
             ),
-            "identity-unresolved" => "Your identity could not be resolved — contact an administrator.".into(),
-            "permission-denied" if code == 401 => "Your session has expired — please log in again.".into(),
+            "identity-unresolved" => {
+                "Your identity could not be resolved — contact an administrator.".into()
+            }
+            "permission-denied" if code == 401 => {
+                "Your session has expired — please log in again.".into()
+            }
             "permission-denied" => "You don't have permission to do that.".into(),
             "field-not-readable" => "You don't have permission to see one of those fields.".into(),
             "unknown-doctype" => "That DocType does not exist.".into(),
@@ -305,8 +365,14 @@ fn session(cx: &Cx) -> Option<Session> {
     let jar = cookies(cx);
     Some(Session {
         token: jar.get("frust_session")?.value().to_string(),
-        user: jar.get("frust_user").map(|c| c.value().to_string()).unwrap_or_default(),
-        role: jar.get("frust_role").map(|c| c.value().to_string()).unwrap_or_default(),
+        user: jar
+            .get("frust_user")
+            .map(|c| c.value().to_string())
+            .unwrap_or_default(),
+        role: jar
+            .get("frust_role")
+            .map(|c| c.value().to_string())
+            .unwrap_or_default(),
     })
 }
 
@@ -407,7 +473,9 @@ fn pct_decode(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or(""), 16) {
+            if let Ok(v) =
+                u8::from_str_radix(std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 out.push(v);
                 i += 3;
                 continue;
@@ -420,7 +488,11 @@ fn pct_decode(s: &str) -> String {
 }
 
 fn flash(cx: &Cx, msg: &str) {
-    cookies(cx).add(Cookie::build(("frust_flash", pct_encode(msg))).path("/").build());
+    cookies(cx).add(
+        Cookie::build(("frust_flash", pct_encode(msg)))
+            .path("/")
+            .build(),
+    );
 }
 
 fn take_flash(cx: &Cx) -> Option<String> {
@@ -441,6 +513,8 @@ struct DocType {
     label: String,
     #[serde(default)]
     submittable: bool,
+    #[serde(default, alias = "is_single")]
+    issingle: bool,
     #[serde(default)]
     fields: Vec<DocField>,
     #[serde(default)]
@@ -497,7 +571,9 @@ impl Rule {
         self.value.clone().unwrap_or_default()
     }
     fn text(&self) -> String {
-        self.message.clone().unwrap_or_else(|| "Not allowed".to_string())
+        self.message
+            .clone()
+            .unwrap_or_else(|| "Not allowed".to_string())
     }
 }
 
@@ -526,19 +602,30 @@ struct MetricSpec {
 
 impl DocType {
     fn label_or_name(&self) -> String {
-        if self.label.is_empty() { self.name.replace('_', " ") } else { self.label.clone() }
+        if self.label.is_empty() {
+            self.name.replace('_', " ")
+        } else {
+            self.label.clone()
+        }
     }
 
     /// The lazy-load gate. A DocType with no script is indistinguishable, on
     /// the wire, from a Desk that has no script engine at all.
     fn script(&self) -> Option<&str> {
-        self.client_script.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        self.client_script
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
     }
 }
 
 impl DocField {
     fn label_or_name(&self) -> String {
-        if self.label.is_empty() { self.fieldname.replace('_', " ") } else { self.label.clone() }
+        if self.label.is_empty() {
+            self.fieldname.replace('_', " ")
+        } else {
+            self.label.clone()
+        }
     }
 }
 
@@ -547,7 +634,7 @@ impl DocField {
 // flattened into "something went wrong on the server".
 
 async fn meta_list(s: &Session) -> std::result::Result<Vec<DocType>, topcoat::Error> {
-    let (code, body) = kernel::call_async(Some(&s.token), "/meta", &serde_json::json!({})).await;
+    let (code, body) = kernel::get_async(Some(&s.token), "/meta").await;
     if code != 200 {
         return Err(kernel_status(code, &body));
     }
@@ -555,7 +642,7 @@ async fn meta_list(s: &Session) -> std::result::Result<Vec<DocType>, topcoat::Er
 }
 
 async fn meta_one(s: &Session, name: &str) -> std::result::Result<DocType, topcoat::Error> {
-    let (code, body) = kernel::call_async(Some(&s.token), &format!("/meta/{name}"), &serde_json::json!({})).await;
+    let (code, body) = kernel::get_async(Some(&s.token), &format!("/meta/{name}")).await;
     if code != 200 {
         return Err(kernel_status(code, &body));
     }
@@ -583,8 +670,10 @@ fn collect_rows(
     let mut rows: Vec<serde_json::Value> = Vec::new();
     for i in 0.. {
         let row_prefix = format!("{prefix}.{i}.");
-        let present: Vec<&(String, String)> =
-            fields.iter().filter(|(k, _)| k.starts_with(&row_prefix)).collect();
+        let present: Vec<&(String, String)> = fields
+            .iter()
+            .filter(|(k, _)| k.starts_with(&row_prefix))
+            .collect();
         if present.is_empty() {
             break; // no more rendered rows
         }
@@ -619,7 +708,9 @@ fn collect_rows(
 fn typed_value(f: &DocField, raw: &str) -> serde_json::Value {
     let raw = raw.trim();
     match f.fieldtype.as_str() {
-        "Currency" => serde_json::json!({ "kind": "decimal", "v": if raw.is_empty() { "0" } else { raw } }),
+        "Currency" => {
+            serde_json::json!({ "kind": "decimal", "v": if raw.is_empty() { "0" } else { raw } })
+        }
         "Int" => serde_json::json!({ "kind": "int", "v": raw.parse::<i64>().unwrap_or(0) }),
         "Check" => serde_json::json!({ "kind": "bool", "v": raw == "on" || raw == "true" }),
         "Link" => serde_json::json!({ "kind": "record", "v": raw }),
@@ -709,8 +800,11 @@ async fn root_layout(cx: &Cx, slot: Result) -> Result {
 /// for a cosmetic difference, and a wrong guess costs a colour, not a fact.
 fn flash_variant(msg: &str) -> &'static str {
     let m = msg.to_ascii_lowercase();
-    if m.starts_with("saved") || m.starts_with("submitted") || m.starts_with("created")
-        || m.starts_with("cancelled") || m.contains("succeeded")
+    if m.starts_with("saved")
+        || m.starts_with("submitted")
+        || m.starts_with("created")
+        || m.starts_with("cancelled")
+        || m.contains("succeeded")
     {
         "success"
     } else {
@@ -724,7 +818,11 @@ fn flash_variant(msg: &str) -> &'static str {
 }
 
 fn flash_title(msg: &str) -> &'static str {
-    if flash_variant(msg) == "success" { "Done" } else { "Couldn't do that" }
+    if flash_variant(msg) == "success" {
+        "Done"
+    } else {
+        "Couldn't do that"
+    }
 }
 
 // ── Login / logout ──────────────────────────────────────────────────────────
@@ -769,7 +867,12 @@ struct LoginInput {
 
 #[route(POST "/login-submit")]
 async fn login_submit(cx: &Cx, Form(input): Form<LoginInput>) -> Result<SeeOther> {
-    let (code, body) = kernel::call_async(None, "/login", &serde_json::json!({ "user": input.user, "pass": input.pass })).await;
+    let (code, body) = kernel::call_async(
+        None,
+        "/login",
+        &serde_json::json!({ "user": input.user, "pass": input.pass }),
+    )
+    .await;
     if code != 200 {
         flash(cx, "Login failed — check your user and password.");
         return Ok(see_other("/login"));
@@ -778,7 +881,12 @@ async fn login_submit(cx: &Cx, Form(input): Form<LoginInput>) -> Result<SeeOther
     let user = body["user"].as_str().unwrap_or_default().to_string();
     let role = body["role"].as_str().unwrap_or_default().to_string();
     let jar = cookies(cx);
-    jar.add(Cookie::build(("frust_session", token)).path("/").http_only(true).build());
+    jar.add(
+        Cookie::build(("frust_session", token))
+            .path("/")
+            .http_only(true)
+            .build(),
+    );
     jar.add(Cookie::build(("frust_user", user)).path("/").build());
     jar.add(Cookie::build(("frust_role", role)).path("/").build());
     Ok(see_other("/"))
@@ -816,7 +924,10 @@ async fn home(cx: &Cx) -> Result {
     // if it is submittable (the things with a lifecycle are the things you
     // act on). So an app installed tomorrow gets its own cards with no
     // recompile — the metadata-driven promise applied to navigation.
-    let starters: Vec<&DocType> = doctypes.iter().filter(|d| d.submittable).collect();
+    let starters: Vec<&DocType> = doctypes
+        .iter()
+        .filter(|d| d.submittable || d.issingle)
+        .collect();
     view! {
         <div class="fui-page-head">
             <h1 class="fui-page-title">"Home"</h1>
@@ -827,14 +938,21 @@ async fn home(cx: &Cx) -> Result {
                     <div class="fui-card">
                         <div class="fui-card__title">(dt.label_or_name())</div>
                         <div class="fui-card__actions">
-                            frust_ui::fui_button(
-                                label: "New", variant: "primary", icon: "plus",
-                                href: format!("/form/{}", dt.name),
-                            )
-                            frust_ui::fui_button(
-                                label: "Open list", variant: "ghost",
-                                href: format!("/list/{}", dt.name),
-                            )
+                            if dt.issingle {
+                                frust_ui::fui_button(
+                                    label: "Open", variant: "primary",
+                                    href: format!("/single/{}", dt.name),
+                                )
+                            } else {
+                                frust_ui::fui_button(
+                                    label: "New", variant: "primary", icon: "plus",
+                                    href: format!("/form/{}", dt.name),
+                                )
+                                frust_ui::fui_button(
+                                    label: "Open list", variant: "ghost",
+                                    href: format!("/list/{}", dt.name),
+                                )
+                            }
                         </div>
                     </div>
                 }
@@ -869,14 +987,21 @@ async fn home(cx: &Cx) -> Result {
                         <tr>
                             <td style="font-weight: 500;">(dt.label_or_name())</td>
                             <td>
-                                if dt.submittable {
+                                if dt.issingle {
+                                    frust_ui::fui_badge(label: "single", color: "blue")
+                                } else if dt.submittable {
                                     frust_ui::fui_badge(label: "submittable", color: "blue")
                                 } else {
                                     frust_ui::fui_badge(label: "record", color: "gray")
                                 }
                             </td>
-                            <td><a href=(format!("/list/{}", dt.name))>"List"</a></td>
-                            <td><a href=(format!("/form/{}", dt.name))>"New"</a></td>
+                            if dt.issingle {
+                                <td><a href=(format!("/single/{}", dt.name))>"Open"</a></td>
+                                <td></td>
+                            } else {
+                                <td><a href=(format!("/list/{}", dt.name))>"List"</a></td>
+                                <td><a href=(format!("/form/{}", dt.name))>"New"</a></td>
+                            }
                             if is_manager {
                                 <td>
                                     <a href=(format!("/script/{}", dt.name))>
@@ -910,6 +1035,9 @@ async fn home(cx: &Cx) -> Result {
                         <div style="margin: 0.75rem 0;">
                             frust_ui::fui_checkbox(label: "Submittable (draft → submitted → cancelled)", name: "submittable")
                         </div>
+                        <div style="margin: 0.75rem 0;">
+                            frust_ui::fui_checkbox(label: "Single record", name: "issingle")
+                        </div>
                         <div class="fui-modal__actions">
                             frust_ui::fui_button(label: "Cancel", variant: "secondary", href: "#")
                             frust_ui::fui_button(label: "Create + sync", variant: "primary", kind: "submit")
@@ -926,13 +1054,20 @@ struct NewDoctype {
     name: String,
     #[serde(default)]
     submittable: Option<String>,
+    #[serde(default)]
+    issingle: Option<String>,
 }
 
 #[route(POST "/new-doctype")]
 async fn new_doctype(cx: &Cx, Form(input): Form<NewDoctype>) -> Result<SeeOther> {
-    let Some(s) = session(cx) else { return Ok(see_other("/login")) };
-    let name: String =
-        input.name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+    let Some(s) = session(cx) else {
+        return Ok(see_other("/login"));
+    };
+    let name: String = input
+        .name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
     if name.is_empty() {
         flash(cx, "The DocType needs a name.");
         return Ok(see_other("/"));
@@ -940,6 +1075,7 @@ async fn new_doctype(cx: &Cx, Form(input): Form<NewDoctype>) -> Result<SeeOther>
     let meta = serde_json::json!({
         "name": name,
         "label": name.replace('_', " "),
+        "issingle": input.issingle.is_some(),
         "submittable": input.submittable.is_some(),
         "fields": [
             { "fieldname": "title", "label": "Title", "fieldtype": "Data", "required": true },
@@ -947,12 +1083,21 @@ async fn new_doctype(cx: &Cx, Form(input): Form<NewDoctype>) -> Result<SeeOther>
             { "fieldname": "notes", "label": "Notes", "fieldtype": "Text", "allow_on_submit": true },
         ]
     });
-    let (code, body) = kernel::call_async(Some(&s.token), "/doctype", &serde_json::json!({ "meta": meta })).await;
+    let (code, body) = kernel::call_async(
+        Some(&s.token),
+        "/doctype",
+        &serde_json::json!({ "meta": meta }),
+    )
+    .await;
     if code != 200 {
         flash(cx, &kernel::friendly(code, &body));
         return Ok(see_other("/"));
     }
-    Ok(see_other(&format!("/form/{name}")))
+    if input.issingle.is_some() {
+        Ok(see_other(&format!("/single/{name}")))
+    } else {
+        Ok(see_other(&format!("/form/{name}")))
+    }
 }
 
 #[component]
@@ -1112,6 +1257,9 @@ async fn list_page(cx: &Cx) -> Result {
     let _permit = admit()?;
     let name = path_param::<DoctypeName>(cx)?.to_string();
     let dt = meta_one(&s, &name).await?;
+    if dt.issingle {
+        return Err(redirect(&format!("/single/{name}")).into());
+    }
     let q = list_query(cx);
 
     // build the contract filter from Tier-0 shapes only
@@ -1156,9 +1304,15 @@ async fn list_page(cx: &Cx) -> Result {
     let cols: Vec<String> = dt.fields.iter().map(|f| f.fieldname.clone()).collect();
     let base_qs = |start: u64| -> String {
         let mut parts = vec![format!("start={start}")];
-        if let Some(m) = &q.month { parts.push(format!("month={m}")); }
-        if let (Some(f), Some(v)) = (&q.field, &q.value) { parts.push(format!("f={f}&v={v}")); }
-        if let Some(so) = &q.sort { parts.push(format!("sort={so}")); }
+        if let Some(m) = &q.month {
+            parts.push(format!("month={m}"));
+        }
+        if let (Some(f), Some(v)) = (&q.field, &q.value) {
+            parts.push(format!("f={f}&v={v}"));
+        }
+        if let Some(so) = &q.sort {
+            parts.push(format!("sort={so}"));
+        }
         format!("?{}", parts.join("&"))
     };
     let months = recent_months();
@@ -1403,7 +1557,11 @@ fn money_sub(a: &str, b: &str, scale: usize) -> Option<String> {
         for _ in 0..scale {
             n = n.checked_mul(10)?;
         }
-        let mut f: i128 = if frac.is_empty() { 0 } else { frac.parse().ok()? };
+        let mut f: i128 = if frac.is_empty() {
+            0
+        } else {
+            frac.parse().ok()?
+        };
         for _ in 0..(scale - frac.len()) {
             f = f.checked_mul(10)?;
         }
@@ -1537,10 +1695,16 @@ async fn form_page(cx: &Cx) -> Result {
     let _permit = admit()?;
     let name = path_param::<DoctypeName>(cx)?.to_string();
     let dt = meta_one(&s, &name).await?;
+    if dt.issingle {
+        return Err(redirect(&format!("/single/{name}")).into());
+    }
 
     // one value signal per metadata field — created at run time, from data
-    let values: Vec<Signal<String>> =
-        dt.fields.iter().map(|_| Signal::new(String::new())).collect();
+    let values: Vec<Signal<String>> = dt
+        .fields
+        .iter()
+        .map(|_| Signal::new(String::new()))
+        .collect();
     let index_of = |fieldname: &str| dt.fields.iter().position(|f| f.fieldname == fieldname);
 
     // Link candidates for the new-record form, same rung
@@ -1785,19 +1949,32 @@ async fn field_input<'a>(
 fn line_diffs(entry: &serde_json::Value) -> Vec<String> {
     let mut out = Vec::new();
     let empty = Vec::new();
-    for ch in entry.get("changes").and_then(|c| c.as_array()).unwrap_or(&empty) {
-        let Some(after) = ch.get("current").or_else(|| ch.get("update")).filter(|v| v.is_object())
+    for ch in entry
+        .get("changes")
+        .and_then(|c| c.as_array())
+        .unwrap_or(&empty)
+    {
+        let Some(after) = ch
+            .get("current")
+            .or_else(|| ch.get("update"))
+            .filter(|v| v.is_object())
         else {
             continue;
         };
-        let after_lines = after.get("lines").and_then(|l| l.as_array()).cloned().unwrap_or_default();
+        let after_lines = after
+            .get("lines")
+            .and_then(|l| l.as_array())
+            .cloned()
+            .unwrap_or_default();
 
         // undo-patch ops rebuild the previous rows for a changed document
         let mut before_lines = after_lines.clone();
         let mut touched = false;
         if let Some(ops) = ch.get("update").and_then(|u| u.as_array()) {
             for op in ops {
-                let Some(path) = op.get("path").and_then(|p| p.as_str()) else { continue };
+                let Some(path) = op.get("path").and_then(|p| p.as_str()) else {
+                    continue;
+                };
                 if !path.starts_with("/lines") {
                     continue;
                 }
@@ -1834,7 +2011,10 @@ fn line_diffs(entry: &serde_json::Value) -> Vec<String> {
         }
 
         let label = |row: &serde_json::Value| -> String {
-            row.get("item").and_then(|i| i.as_str()).unwrap_or("(row)").to_string()
+            row.get("item")
+                .and_then(|i| i.as_str())
+                .unwrap_or("(row)")
+                .to_string()
         };
         let n = before_lines.len().max(after_lines.len());
         for i in 0..n {
@@ -1842,7 +2022,10 @@ fn line_diffs(entry: &serde_json::Value) -> Vec<String> {
                 (None, Some(a)) => out.push(format!("+ added   {}", label(a))),
                 (Some(b), None) => out.push(format!("- removed {}", label(b))),
                 (Some(b), Some(a)) if b != a => {
-                    let fields = a.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
+                    let fields = a
+                        .as_object()
+                        .map(|o| o.keys().cloned().collect::<Vec<_>>())
+                        .unwrap_or_default();
                     for f in fields {
                         if b.get(&f) != a.get(&f) {
                             out.push(format!(
@@ -2144,7 +2327,9 @@ async fn script_page(cx: &Cx) -> Result {
     struct ScriptQuery {
         saved: Option<String>,
     }
-    let saved = query_params::<ScriptQuery>(cx).ok().is_some_and(|q| q.saved.is_some());
+    let saved = query_params::<ScriptQuery>(cx)
+        .ok()
+        .is_some_and(|q| q.saved.is_some());
 
     view! {
         <h1>"Client script — " (dt.label_or_name())</h1>
@@ -2181,7 +2366,7 @@ async fn script_page(cx: &Cx) -> Result {
             "and a float on a Currency field is " <b>"rejected, not stored"</b> ". The safe path:"
         </p>
         <pre style="background:#f6f6f6; padding: 10px 12px; border-radius: 4px; max-width: 46rem; overflow-x: auto;"><code>"var v = Number(doc.amount) * 3;   // compute
-doc.amount = v.toFixed(2);        // round explicitly, write back a string"</code></pre>
+    doc.amount = v.toFixed(2);        // round explicitly, write back a string"</code></pre>
         <p style="color:#666; max-width: 46rem;">
             <small>"Exact money arithmetic belongs on the server; a client script should route, flag and label money, not compute it."</small>
         </p>
@@ -2190,19 +2375,26 @@ doc.amount = v.toFixed(2);        // round explicitly, write back a string"</cod
 
 #[route(POST "/script-save/{doctype_name}")]
 async fn script_save(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<SeeOther> {
-    let Some(s) = session(cx) else { return Ok(see_other("/login")) };
+    let Some(s) = session(cx) else {
+        return Ok(see_other("/login"));
+    };
     let name = path_param::<DoctypeName>(cx)?.to_string();
     let clear = fields.iter().any(|(k, _)| k == "clear");
     let script = if clear {
         String::new()
     } else {
-        fields.iter().find(|(k, _)| k == "script").map(|(_, v)| v.clone()).unwrap_or_default()
+        fields
+            .iter()
+            .find(|(k, _)| k == "script")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
     };
     let (code, out) = kernel::call_async(
         Some(&s.token),
         &format!("/doctype/{name}/script"),
         &serde_json::json!({ "script": script }),
-    ).await;
+    )
+    .await;
     if code != 200 {
         flash(cx, &kernel::friendly(code, &out));
         return Ok(see_other(&format!("/script/{name}")));
@@ -2328,7 +2520,8 @@ async fn link_options(s: &Session, target: &str) -> Vec<String> {
         Err(_) => None,
     };
 
-    let body = serde_json::json!({ "limit": LINK_OPTION_CAP, "order": { "path": "id", "dir": "asc" } });
+    let body =
+        serde_json::json!({ "limit": LINK_OPTION_CAP, "order": { "path": "id", "dir": "asc" } });
     let (code, out) = kernel::call_async(Some(&s.token), &format!("/read/{target}"), &body).await;
     if code != 200 {
         return Vec::new();
@@ -2349,9 +2542,174 @@ async fn link_options(s: &Session, target: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[page("/single/{doctype_name}")]
+async fn single_page(cx: &Cx) -> Result {
+    let s = require_session(cx)?;
+    let _permit = admit()?;
+    let name = path_param::<DoctypeName>(cx)?.to_string();
+    let dt = meta_one(&s, &name).await?;
+    if !dt.issingle {
+        return view! { error_block(message: "That DocType is not a Single.".to_string(), back: "/".to_string()) };
+    }
+
+    let (code, out) = kernel::call_async(
+        Some(&s.token),
+        &format!("/single/{name}"),
+        &serde_json::json!({}),
+    )
+    .await;
+    if code == 401 {
+        return Err(redirect("/login").into());
+    }
+    if code != 200 {
+        return view! { error_block(message: kernel::friendly(code, &out), back: "/".to_string()) };
+    }
+    let row = out["row"].clone();
+    if row.is_null() {
+        return view! { error_block(message: "The Single record is not available yet.".to_string(), back: "/".to_string()) };
+    }
+
+    let mut child_meta: Vec<(String, DocType)> = Vec::new();
+    let mut row_arrays: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
+    for f in dt.fields.iter().filter(|f| f.fieldtype == "Table") {
+        if let Some(child_name) = f.options.first() {
+            if let Ok(child) = meta_one(&s, child_name).await {
+                child_meta.push((f.fieldname.clone(), child));
+            }
+        }
+        let rows = row[&f.fieldname].as_array().cloned().unwrap_or_default();
+        row_arrays.push((f.fieldname.clone(), rows));
+    }
+
+    let mut link_opts: Vec<(String, Vec<String>)> = Vec::new();
+    for f in dt.fields.iter().filter(|f| f.fieldtype == "Link") {
+        if let Some(target) = f.options.first() {
+            link_opts.push((f.fieldname.clone(), link_options(&s, target).await));
+        }
+    }
+
+    let table_shown: Vec<Signal<f64>> = child_meta.iter().map(|_| Signal::new(0.0)).collect();
+    let max_rows = row_arrays.iter().map(|(_, r)| r.len()).max().unwrap_or(0) + SPARE_ROWS;
+    let line_money: Vec<Signal<String>> =
+        (0..max_rows).map(|_| Signal::new(String::new())).collect();
+
+    view! {
+        <div class="fui-page-head">
+            <h1 class="fui-page-title">(dt.label_or_name())</h1>
+            <div class="fui-page-actions">
+                frust_ui::fui_button(label: "Home", variant: "ghost", href: "/")
+            </div>
+        </div>
+        dirty_guard()
+        <script type="module" src="/runtime.js"></script>
+        for sig in &table_shown { (SignalDeclaration::new(sig)) }
+        for sig in &line_money { (SignalDeclaration::new(sig)) }
+        if dt.script().is_some() {
+            <div id="script-status" style="display:none; padding:6px 10px; border-radius:4px; margin:6px 0;"></div>
+            <script type="module" src=(format!("/engine-boot/{}", dt.name))></script>
+        }
+        <form id="doc-form" method="post" action=(format!("/single-save/{name}"))>
+            for field in &dt.fields {
+                if field.fieldtype == "Table" {
+                    match child_meta.iter().find(|(fname, _)| fname == &field.fieldname) {
+                        Some((_, child)) => {
+                            let rows = row_arrays
+                                .iter()
+                                .find(|(fname, _)| fname == &field.fieldname)
+                                .map(|(_, r)| r.as_slice())
+                                .unwrap_or(&[]);
+                            let shown = &table_shown[child_meta
+                                .iter()
+                                .position(|(fname, _)| fname == &field.fieldname)
+                                .unwrap_or(0)];
+                            line_editor(
+                                parent_field: &field.fieldname,
+                                child: child,
+                                rows: rows,
+                                shown: shown,
+                                editable: true,
+                                row_money: &line_money,
+                            )
+                        }
+                        None => {}
+                    }
+                } else {
+                    field_row(
+                        field: field,
+                        value: cell(&row[&field.fieldname]),
+                        editable: true,
+                        link_options: link_opts
+                            .iter()
+                            .find(|(f, _)| f == &field.fieldname)
+                            .map(|(_, o)| o.as_slice())
+                            .unwrap_or(&[]),
+                    )
+                }
+            }
+            <div class="fui-form-actions">
+                frust_ui::fui_button(label: "Save", variant: "primary", kind: "submit")
+            </div>
+        </form>
+    }
+}
+
+#[route(POST "/single-save/{doctype_name}")]
+async fn save_single(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<SeeOther> {
+    let Some(s) = session(cx) else {
+        return Ok(see_other("/login"));
+    };
+    let name = path_param::<DoctypeName>(cx)?.to_string();
+    let Ok(dt) = meta_one(&s, &name).await else {
+        flash(cx, "That DocType does not exist.");
+        return Ok(see_other("/"));
+    };
+    if !dt.issingle {
+        flash(cx, "That DocType is not a Single.");
+        return Ok(see_other("/"));
+    }
+
+    let mut doc = serde_json::Map::new();
+    for f in &dt.fields {
+        if f.fieldtype == "Table" {
+            let Some(child_name) = f.options.first() else {
+                continue;
+            };
+            let Ok(child) = meta_one(&s, child_name).await else {
+                continue;
+            };
+            let rows = collect_rows(&f.fieldname, &child, &fields);
+            doc.insert(f.fieldname.clone(), serde_json::Value::Array(rows));
+        } else if let Some((_, raw)) = fields.iter().find(|(k, _)| k == &f.fieldname) {
+            doc.insert(f.fieldname.clone(), typed_value(f, raw));
+        } else if f.fieldtype == "Check" {
+            // An unchecked checkbox is absent from HTML form data. Only for
+            // Check fields does absent mean an explicit false — otherwise the
+            // box could never be saved unchecked. Absent non-Check inputs keep
+            // their omit semantics.
+            doc.insert(f.fieldname.clone(), typed_value(f, ""));
+        }
+    }
+
+    let (code, body) = kernel::call_async(
+        Some(&s.token),
+        &format!("/single/{name}/write"),
+        &serde_json::json!({ "doc": doc }),
+    )
+    .await;
+    if code == 401 {
+        return Ok(see_other("/login"));
+    }
+    if code != 200 {
+        flash(cx, &kernel::friendly(code, &body));
+    }
+    Ok(see_other(&format!("/single/{name}")))
+}
+
 #[route(POST "/submit/{doctype_name}")]
 async fn submit_new(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<SeeOther> {
-    let Some(s) = session(cx) else { return Ok(see_other("/login")) };
+    let Some(s) = session(cx) else {
+        return Ok(see_other("/login"));
+    };
     let name = path_param::<DoctypeName>(cx)?.to_string();
     let Ok(dt) = meta_one(&s, &name).await else {
         flash(cx, "That DocType does not exist.");
@@ -2360,14 +2718,19 @@ async fn submit_new(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Resul
 
     let mut doc = serde_json::Map::new();
     for f in &dt.fields {
-        let raw = fields.iter().find(|(k, _)| k == &f.fieldname).map(|(_, v)| v.as_str()).unwrap_or("");
+        let raw = fields
+            .iter()
+            .find(|(k, _)| k == &f.fieldname)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
         doc.insert(f.fieldname.clone(), typed_value(f, raw));
     }
     let (code, body) = kernel::call_async(
         Some(&s.token),
         &format!("/write/{name}"),
         &serde_json::json!({ "doc": doc }),
-    ).await;
+    )
+    .await;
     if code == 401 {
         return Ok(see_other("/login"));
     }
@@ -2429,12 +2792,21 @@ async fn doc_page(cx: &Cx) -> Result {
     // judge uses — so a button that renders is a transition that will be
     // allowed. No workflow → `workflow: null`, and the raw docstatus
     // affordances below stand unchanged (criterion 1).
-    let (wf_code, wf_out) = kernel::call_async(Some(&s.token), &format!("/workflow/{name}/{key}"), &serde_json::json!({})).await;
+    let (wf_code, wf_out) = kernel::call_async(
+        Some(&s.token),
+        &format!("/workflow/{name}/{key}"),
+        &serde_json::json!({}),
+    )
+    .await;
     let under_workflow = wf_code == 200 && wf_out["workflow"].is_string();
     let wf_state = wf_out["state"].as_str().unwrap_or("").to_string();
     let wf_actions: Vec<String> = wf_out["actions"]
         .as_array()
-        .map(|a| a.iter().filter_map(|t| t["action"].as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| t["action"].as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     // Under a workflow the transition buttons are the ONLY lifecycle
     // affordance: the raw docstatus submit/cancel bypass the judge, so they
@@ -2442,7 +2814,11 @@ async fn doc_page(cx: &Cx) -> Result {
     let can_submit = ds_can_submit && !under_workflow;
     let can_cancel = can_cancel && !under_workflow;
     // The badge shows the workflow state when there is one, else the docstatus.
-    let state = if under_workflow { wf_state.clone() } else { ds_state };
+    let state = if under_workflow {
+        wf_state.clone()
+    } else {
+        ds_state
+    };
 
     // ── Child tables ──
     // Each Table field names its child DocType in `options`; the child's own
@@ -2472,8 +2848,7 @@ async fn doc_page(cx: &Cx) -> Result {
 
     // one reveal counter per table, and one money signal per rendered row
     // (row-scoped, so declarative rules can apply per line)
-    let table_shown: Vec<Signal<f64>> =
-        child_meta.iter().map(|_| Signal::new(0.0)).collect();
+    let table_shown: Vec<Signal<f64>> = child_meta.iter().map(|_| Signal::new(0.0)).collect();
     let max_rows = row_arrays.iter().map(|(_, r)| r.len()).max().unwrap_or(0) + SPARE_ROWS;
     let line_money: Vec<Signal<String>> =
         (0..max_rows).map(|_| Signal::new(String::new())).collect();
@@ -2689,7 +3064,11 @@ async fn print_page(cx: &Cx) -> Result {
         .filter(|f| f.fieldtype != "Table")
         .map(|f| {
             let raw = cell(&row[&f.fieldname]);
-            let shown = if f.fieldtype == "Currency" { pad_money(&raw, MONEY_SCALE) } else { raw };
+            let shown = if f.fieldtype == "Currency" {
+                pad_money(&raw, MONEY_SCALE)
+            } else {
+                raw
+            };
             (f.label_or_name(), shown)
         })
         .filter(|(_, v)| !v.is_empty())
@@ -2761,7 +3140,9 @@ async fn print_page(cx: &Cx) -> Result {
 
 #[route(POST "/save/{doctype_name}/{record_key}")]
 async fn save_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<SeeOther> {
-    let Some(s) = session(cx) else { return Ok(see_other("/login")) };
+    let Some(s) = session(cx) else {
+        return Ok(see_other("/login"));
+    };
     let name = path_param::<DoctypeName>(cx)?.to_string();
     let key = path_param::<RecordKey>(cx)?.to_string();
     let Ok(dt) = meta_one(&s, &name).await else {
@@ -2779,10 +3160,16 @@ async fn save_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<
         // lifecycle transitions carry ONLY docstatus — the lattice EVENT
         // under the write is the enforcement, this is just the affordance
         "submit" => {
-            doc.insert("docstatus".into(), serde_json::json!({ "kind": "int", "v": 1 }));
+            doc.insert(
+                "docstatus".into(),
+                serde_json::json!({ "kind": "int", "v": 1 }),
+            );
         }
         "cancel" => {
-            doc.insert("docstatus".into(), serde_json::json!({ "kind": "int", "v": 2 }));
+            doc.insert(
+                "docstatus".into(),
+                serde_json::json!({ "kind": "int", "v": 2 }),
+            );
         }
         _ => {
             for f in &dt.fields {
@@ -2790,8 +3177,12 @@ async fn save_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<
                 // so hooks and the Tier-2 line-differ see the full document
                 // rather than a patch (children are embedded).
                 if f.fieldtype == "Table" {
-                    let Some(child_name) = f.options.first() else { continue };
-                    let Ok(child) = meta_one(&s, child_name).await else { continue };
+                    let Some(child_name) = f.options.first() else {
+                        continue;
+                    };
+                    let Ok(child) = meta_one(&s, child_name).await else {
+                        continue;
+                    };
                     let rows = collect_rows(&f.fieldname, &child, &fields);
                     doc.insert(f.fieldname.clone(), serde_json::Value::Array(rows));
                 } else if let Some((_, raw)) = fields.iter().find(|(k, _)| k == &f.fieldname) {
@@ -2804,7 +3195,8 @@ async fn save_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<
         Some(&s.token),
         &format!("/write/{name}"),
         &serde_json::json!({ "doc": doc, "record": key }),
-    ).await;
+    )
+    .await;
     if code == 401 {
         return Ok(see_other("/login"));
     }
@@ -2820,7 +3212,9 @@ async fn save_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<
 /// transition logic; it posts the action and surfaces the typed refusal.
 #[route(POST "/transition/{doctype_name}/{record_key}")]
 async fn transition_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<SeeOther> {
-    let Some(s) = session(cx) else { return Ok(see_other("/login")) };
+    let Some(s) = session(cx) else {
+        return Ok(see_other("/login"));
+    };
     let name = path_param::<DoctypeName>(cx)?.to_string();
     let key = path_param::<RecordKey>(cx)?.to_string();
     let Some((_, action)) = fields.iter().find(|(k, _)| k == "action") else {
@@ -2831,7 +3225,8 @@ async fn transition_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> R
         Some(&s.token),
         &format!("/transition/{name}/{key}"),
         &serde_json::json!({ "action": action }),
-    ).await;
+    )
+    .await;
     if code == 401 {
         return Ok(see_other("/login"));
     }
@@ -2855,7 +3250,12 @@ async fn live_subscribe(cx: &Cx) -> Result<String> {
     let s = require_session(cx)?;
     let _permit = admit()?;
     let table = path_param::<LiveName>(cx)?.to_string();
-    let (code, body) = kernel::call_async(Some(&s.token), &format!("/subscribe/{table}"), &serde_json::json!({})).await;
+    let (code, body) = kernel::call_async(
+        Some(&s.token),
+        &format!("/subscribe/{table}"),
+        &serde_json::json!({}),
+    )
+    .await;
     if code != 200 {
         // budget refusal / disabled realtime: the list keeps polling
         return Err(topcoat::router::error::bad_request("live unavailable").into());
@@ -2868,7 +3268,12 @@ async fn live_events(cx: &Cx) -> Result<String> {
     let s = require_session(cx)?;
     let _permit = admit()?;
     let sub = path_param::<LiveName>(cx)?.to_string();
-    let (code, body) = kernel::call_async(Some(&s.token), &format!("/events/{sub}"), &serde_json::json!({})).await;
+    let (code, body) = kernel::call_async(
+        Some(&s.token),
+        &format!("/events/{sub}"),
+        &serde_json::json!({}),
+    )
+    .await;
     if code != 200 {
         return Err(topcoat::router::error::bad_request("subscription gone").into());
     }
@@ -2900,7 +3305,12 @@ async fn live_sse(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use
     let s = require_session(cx)?;
     let _permit = admit()?;
     let table = path_param::<LiveName>(cx)?.to_string();
-    let (code, body) = kernel::call_async(Some(&s.token), &format!("/subscribe/{table}"), &serde_json::json!({})).await;
+    let (code, body) = kernel::call_async(
+        Some(&s.token),
+        &format!("/subscribe/{table}"),
+        &serde_json::json!({}),
+    )
+    .await;
     if code != 200 {
         // budget refusal (429) / realtime disabled: refuse the stream so the
         // client falls back to polling rather than holding a
@@ -2912,7 +3322,10 @@ async fn live_sse(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use
     // The guard unsubscribes when the stream is dropped (browser closed the
     // connection), keeping the per-table budget honest instead of
     // waiting out the kernel's 30 s idle reaper.
-    let guard = SubGuard { token: s.token.clone(), sub: sub.clone() };
+    let guard = SubGuard {
+        token: s.token.clone(),
+        sub: sub.clone(),
+    };
 
     let events = futures_util::stream::unfold(Some(guard), move |guard| {
         let sub = sub.clone();
@@ -2927,15 +3340,21 @@ async fn live_sse(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use
             // design avoids. Exists so the measurement can be shown to FAIL.
             #[cfg(feature = "naive-blocking-sse")]
             std::thread::sleep(std::time::Duration::from_millis(LIVE_DRAIN_MS));
-            let (code, body) =
-                kernel::call_async(Some(&guard.token), &format!("/events/{sub}"), &serde_json::json!({})).await;
+            let (code, body) = kernel::call_async(
+                Some(&guard.token),
+                &format!("/events/{sub}"),
+                &serde_json::json!({}),
+            )
+            .await;
             if code != 200 || !body["alive"].as_bool().unwrap_or(false) {
                 return None; // ends the stream; the guard drops and unsubscribes
             }
             let n = body["events"].as_array().map_or(0, |a| a.len());
             // One event per tick BATCH, not per row: the client's response is
             // "refetch", so N ticks and one tick mean the same thing.
-            let ev = Event::new().event(if n > 0 { "tick" } else { "idle" }).data(n.to_string());
+            let ev = Event::new()
+                .event(if n > 0 { "tick" } else { "idle" })
+                .data(n.to_string());
             Some((Ok(ev), Some(guard)))
         }
     });
@@ -2957,7 +3376,11 @@ struct SubGuard {
 impl Drop for SubGuard {
     fn drop(&mut self) {
         // One short call; the kernel's idle reaper is the backstop if it fails.
-        let _ = kernel::call(Some(&self.token), &format!("/unsubscribe/{}", self.sub), &serde_json::json!({}));
+        let _ = kernel::call(
+            Some(&self.token),
+            &format!("/unsubscribe/{}", self.sub),
+            &serde_json::json!({}),
+        );
     }
 }
 
@@ -2966,7 +3389,12 @@ async fn live_unsubscribe(cx: &Cx) -> Result<String> {
     let s = require_session(cx)?;
     let _permit = admit()?;
     let sub = path_param::<LiveName>(cx)?.to_string();
-    let _ = kernel::call_async(Some(&s.token), &format!("/unsubscribe/{sub}"), &serde_json::json!({})).await;
+    let _ = kernel::call_async(
+        Some(&s.token),
+        &format!("/unsubscribe/{sub}"),
+        &serde_json::json!({}),
+    )
+    .await;
     Ok(r#"{"ok":true}"#.to_string())
 }
 
@@ -2987,7 +3415,11 @@ async fn reports_index(cx: &Cx) -> Result {
     let mut entries: Vec<(String, String, Vec<String>)> = Vec::new(); // (rollup, tier, sources)
     for dt in &doctypes {
         for a in &dt.aggregates {
-            let tier = if a.kind == "counter" { "Tier 1 · exact" } else { "Tier 2 · eventually consistent" };
+            let tier = if a.kind == "counter" {
+                "Tier 1 · exact"
+            } else {
+                "Tier 2 · eventually consistent"
+            };
             match entries.iter_mut().find(|(r, _, _)| r == &a.rollup) {
                 // a rollup fed by several doctypes lists all of them
                 Some((_, _, sources)) => {
@@ -3059,8 +3491,8 @@ async fn report_page(cx: &Cx) -> Result {
     // Derived only when BOTH metrics are present, so this stays a convention
     // the accounting rollup satisfies rather than a column invented for every
     // rollup in the system.
-    let derives_outstanding = metric_names.iter().any(|m| m == "charged")
-        && metric_names.iter().any(|m| m == "paid");
+    let derives_outstanding =
+        metric_names.iter().any(|m| m == "charged") && metric_names.iter().any(|m| m == "paid");
 
     // the rollup is a DocType: read through the same contract as any record
     let body = serde_json::json!({ "order": { "path": "k", "dir": "asc" }, "limit": 200 });
@@ -3077,7 +3509,12 @@ async fn report_page(cx: &Cx) -> Result {
     // returns anything else, lag is None and the staleness line is silently
     // omitted below.
     let lag = if is_tier2 {
-        let (lc, lb) = kernel::call_async(Some(&s.token), &format!("/lag/{rollup}"), &serde_json::json!({})).await;
+        let (lc, lb) = kernel::call_async(
+            Some(&s.token),
+            &format!("/lag/{rollup}"),
+            &serde_json::json!({}),
+        )
+        .await;
         if lc == 200 { Some(lb) } else { None }
     } else {
         None
@@ -3156,7 +3593,12 @@ async fn audit_page(cx: &Cx) -> Result {
     let _permit = admit()?;
     let name = path_param::<DoctypeName>(cx)?.to_string();
     let key = path_param::<RecordKey>(cx)?.to_string();
-    let (code, out) = kernel::call_async(Some(&s.token), &format!("/audit/{name}/{key}"), &serde_json::json!({})).await;
+    let (code, out) = kernel::call_async(
+        Some(&s.token),
+        &format!("/audit/{name}/{key}"),
+        &serde_json::json!({}),
+    )
+    .await;
     if code == 401 {
         return Err(redirect("/login").into());
     }
@@ -3193,7 +3635,7 @@ async fn audit_page(cx: &Cx) -> Result {
 
 #[cfg(test)]
 mod tests {
-    use super::{money_sub, pad_money, MONEY_SCALE};
+    use super::{MONEY_SCALE, money_sub, pad_money};
 
     /// The money-formatting ruling, pinned. The interesting cases are the two
     /// at the edges: SurrealDB's stripped trailing zero (which is why this
@@ -3326,7 +3768,10 @@ mod tests {
             ("fui-badge", "fui_badge", "color"),
         ] {
             let defined = defined_modifiers(CSS, component);
-            assert!(!defined.is_empty(), "no `.{component}--*` classes found — did the CSS move?");
+            assert!(
+                !defined.is_empty(),
+                "no `.{component}--*` classes found — did the CSS move?"
+            );
             for src in [UI_RS, MAIN_RS] {
                 for value in call_site_args(src, fn_name, param) {
                     if !defined.contains(&value) {
@@ -3417,7 +3862,10 @@ mod tests {
             CSS,
             "\n  :root:not([data-theme=\"light\"]) {",
         ));
-        assert!(!explicit.is_empty(), "explicit dark theme defines no tokens");
+        assert!(
+            !explicit.is_empty(),
+            "explicit dark theme defines no tokens"
+        );
         assert_eq!(
             preferred, explicit,
             "OS-driven dark mode must redeclare the complete explicit dark token set"
