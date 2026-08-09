@@ -45,7 +45,7 @@ use topcoat::{
         route,
     },
     runtime::{Decimal, Signal, SignalDeclaration},
-    view::{component, view},
+    view::{NodeViewParts, PartsWriter, component, view},
 };
 
 #[tokio::main]
@@ -657,11 +657,96 @@ const ACCENT_COLORS: &[&str] = &[
 const RADIUS_SCALES: &[&str] = &["compact", "comfortable", "rounded"];
 const FONT_FAMILIES: &[&str] = &["Inter", "System UI", "Georgia", "Verdana"];
 
+/// One complete accent token family per accent option.
+///
+/// The static stylesheet's accent is not one variable but a family — a surface,
+/// a hover/active `strong`, an `ink` for text/links, two tinted surfaces, an
+/// outline, and a focus ring. Overriding only the surface and ink left the rest
+/// static blue, so a pink accent rendered pink buttons with blue hovers and blue
+/// focus rings. Because the accent vocabulary is CLOSED, each option carries a
+/// fully precomputed family here rather than deriving shades with runtime color
+/// math (a dependency, or hand-rolled arithmetic, for six known values).
+///
+/// Every `--fui-blue-ink` clears WCAG AA (>=4.5:1 contrast) on the default white
+/// surface; the raw accent hues do not (the amber surface is only 3.19:1), which
+/// is why `ink` is a separate, darker value than the surface. The contrast floor
+/// and the family-completeness invariant are both asserted in the tests, which
+/// recompute the ratio from relative luminance.
+///
+/// Position 0 of each family is `("--fui-blue", <the accent option>)`, so the
+/// option a stored row selects is the family's own lookup key.
+const ACCENT_FAMILIES: &[[(&str, &str); 7]] = &[
+    [
+        ("--fui-blue", "#0d8ef8"),
+        ("--fui-blue-strong", "#077ddf"),
+        ("--fui-blue-ink", "#0e6fbf"),
+        ("--fui-blue-surface-1", "#f1f8fe"),
+        ("--fui-blue-surface-2", "#e6f4ff"),
+        ("--fui-blue-outline", "#b5ddfd"),
+        ("--fui-focus-ring", "rgba(13,142,248,0.30)"),
+    ],
+    [
+        ("--fui-blue", "#2563eb"),
+        ("--fui-blue-strong", "#1d4ed8"),
+        ("--fui-blue-ink", "#1d4ed8"),
+        ("--fui-blue-surface-1", "#eff4ff"),
+        ("--fui-blue-surface-2", "#dbe6fe"),
+        ("--fui-blue-outline", "#bfd0fb"),
+        ("--fui-focus-ring", "rgba(37,99,235,0.30)"),
+    ],
+    [
+        ("--fui-blue", "#059669"),
+        ("--fui-blue-strong", "#047857"),
+        ("--fui-blue-ink", "#047857"),
+        ("--fui-blue-surface-1", "#eefbf4"),
+        ("--fui-blue-surface-2", "#d5f5e3"),
+        ("--fui-blue-outline", "#a7e8c6"),
+        ("--fui-focus-ring", "rgba(5,150,105,0.30)"),
+    ],
+    [
+        ("--fui-blue", "#7c3aed"),
+        ("--fui-blue-strong", "#6d28d9"),
+        ("--fui-blue-ink", "#6d28d9"),
+        ("--fui-blue-surface-1", "#f6f2fe"),
+        ("--fui-blue-surface-2", "#ede4fd"),
+        ("--fui-blue-outline", "#d3bdf8"),
+        ("--fui-focus-ring", "rgba(124,58,237,0.30)"),
+    ],
+    [
+        ("--fui-blue", "#db2777"),
+        ("--fui-blue-strong", "#be185d"),
+        ("--fui-blue-ink", "#be185d"),
+        ("--fui-blue-surface-1", "#fdf2f8"),
+        ("--fui-blue-surface-2", "#fbe0ee"),
+        ("--fui-blue-outline", "#f6b6d6"),
+        ("--fui-focus-ring", "rgba(219,39,119,0.30)"),
+    ],
+    [
+        ("--fui-blue", "#d97706"),
+        ("--fui-blue-strong", "#b45309"),
+        ("--fui-blue-ink", "#b45309"),
+        ("--fui-blue-surface-1", "#fdf6ec"),
+        ("--fui-blue-surface-2", "#fcecd0"),
+        ("--fui-blue-outline", "#f6d99a"),
+        ("--fui-focus-ring", "rgba(217,119,6,0.30)"),
+    ],
+];
+
+/// The accent option a stored row selected keys into its precomputed family.
+fn accent_family(accent: &str) -> Option<&'static [(&'static str, &'static str); 7]> {
+    ACCENT_FAMILIES.iter().find(|family| family[0].1 == accent)
+}
+
 #[cfg(test)]
 const BRAND_TOKEN_NAMES: &[&str] = &[
     "--fui-primary-bg",
     "--fui-blue",
+    "--fui-blue-strong",
     "--fui-blue-ink",
+    "--fui-blue-surface-1",
+    "--fui-blue-surface-2",
+    "--fui-blue-outline",
+    "--fui-focus-ring",
     "--fui-radius-sm",
     "--fui-radius",
     "--fui-radius-md",
@@ -764,6 +849,26 @@ fn logo_url(row: &serde_json::Value) -> Option<&str> {
     Some(value)
 }
 
+/// Opts an OWNED, kernel-validated string out of `view!`'s HTML escaping.
+///
+/// `view!` escapes interpolated text (`&` -> `&amp;`, `<`, `>`), so a logo URL
+/// with a query string interpolated normally renders `url("…?v=2&amp;c=1")` — a
+/// broken declaration the browser ignores. Unlike `frust_ui`'s compile-time
+/// `Raw` (which only ever carries `&'static` SVG constants), this holds a runtime
+/// `String`; the ONLY value it is handed is the output of `brand_style_from_row`,
+/// and INVARIANT: every byte of that value is a closed-vocabulary token name, a
+/// hex from a fixed list, a named radius or font bundle, or a logo URL the strict
+/// mapper already accepted at the write door. Raw rendering of
+/// write-door-validated data is therefore safe by construction — there is no
+/// untrusted text on this path to escape.
+struct RawCss(String);
+
+impl NodeViewParts for RawCss {
+    fn into_view_parts(self, _cx: &Cx, parts: &mut PartsWriter<'_>) {
+        parts.push_str_unescaped(self.0);
+    }
+}
+
 /// Map stored brand data onto the fixed token vocabulary. Colors are emitted
 /// byte-for-byte, named radius and font choices select fixed bundles, and an
 /// accepted logo URL can only occupy the fixed `url("...")` value slot.
@@ -773,9 +878,10 @@ fn brand_style_from_row(row: &serde_json::Value) -> Option<String> {
     if let Some(value) = selected(row, "primary_color", PRIMARY_COLORS) {
         declarations.push(format!("--fui-primary-bg:{value};"));
     }
-    if let Some(value) = selected(row, "accent_color", ACCENT_COLORS) {
-        declarations.push(format!("--fui-blue:{value};"));
-        declarations.push(format!("--fui-blue-ink:{value};"));
+    if let Some(family) = selected(row, "accent_color", ACCENT_COLORS).and_then(accent_family) {
+        for &(token, value) in family {
+            declarations.push(format!("{token}:{value};"));
+        }
     }
     match selected(row, "corner_radius_scale", RADIUS_SCALES) {
         Some("compact") => declarations.extend([
@@ -956,7 +1062,7 @@ async fn root_layout(cx: &Cx, slot: Result) -> Result {
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <link rel="stylesheet" href="/frust-ui.css">
                 if let Some(css) = &brand_css {
-                    <style data-frust-brand="tenant">(css)</style>
+                    <style data-frust-brand="tenant">(RawCss(css.clone()))</style>
                 }
                 <link rel="preconnect" href="https://fonts.googleapis.com">
                 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
@@ -1118,16 +1224,23 @@ async fn logout(cx: &Cx) -> Result {
 #[page("/brand-settings")]
 async fn brand_settings_page(cx: &Cx) -> Result {
     let s = require_session(cx)?;
+    // `frust_role` gates only what the Desk offers, not what is allowed. The
+    // kernel authorizes every call by the bearer token — /meta needs a session
+    // and /doctype requires a manager there — so a forged role cookie reaches
+    // the same refusal; this check just skips the friendlier early message.
     if s.role != "manager" {
         return Err(bad_request("brand settings are manager-only").into());
     }
     let _permit = admit()?;
-    let (code, _) = kernel::get_async(Some(&s.token), "/meta/brand_settings").await;
-    if code == 200 {
-        return Err(redirect("/single/brand_settings").into());
-    }
-    if code == 401 {
-        return Err(redirect("/login").into());
+    let (code, body) = kernel::get_async(Some(&s.token), "/meta/brand_settings").await;
+    match code {
+        200 => return Err(redirect("/single/brand_settings").into()),
+        401 => return Err(redirect("/login").into()),
+        // Only a genuine "not found" means the Single has never been installed.
+        // A 403/500/502/etc. is a live failure to surface honestly, not an
+        // invitation to offer the install flow.
+        404 => {}
+        _ => return Err(kernel_status(code, &body)),
     }
 
     view! {
@@ -3908,8 +4021,8 @@ mod tests {
     use std::net::TcpListener;
 
     use super::{
-        BRAND_TOKEN_NAMES, MONEY_SCALE, brand_settings_meta, brand_style_from_row, money_sub,
-        pad_money, tenant_from_host,
+        ACCENT_COLORS, ACCENT_FAMILIES, BRAND_TOKEN_NAMES, MONEY_SCALE, accent_family,
+        brand_settings_meta, brand_style_from_row, money_sub, pad_money, tenant_from_host,
     };
     use topcoat::cookie::RouterBuilderCookieExt;
     use topcoat::router::{Body, Request, Router, RouterBuilderDiscoverExt, to_bytes};
@@ -3962,7 +4075,11 @@ mod tests {
                     serde_json::json!({
                         "primary_color": "#be123c",
                         "accent_color": "#7c3aed",
-                        "logo_url": "https://cdn.example.test/beta-mark.svg"
+                        // an `&` query string is legal for the logo mapper and is
+                        // exactly the byte `view!`'s text escaping would rewrite
+                        // to `&amp;` — so this URL only survives intact if the
+                        // brand CSS is rendered raw
+                        "logo_url": "https://cdn.example.test/beta-mark.svg?v=2&cache=1"
                     })
                 } else {
                     serde_json::json!({})
@@ -4017,12 +4134,29 @@ mod tests {
             "{acme}"
         );
         assert!(acme.contains("--fui-primary-bg:#1d4ed8;"));
-        assert!(acme.contains("/assets/acme-mark.svg"));
+        // The generated CSS must render RAW: an HTML-escaped `url(&quot;…&quot;)`
+        // is a broken declaration, so assert the exact unescaped `url("…")`.
+        assert!(
+            acme.contains("--fui-brand-logo-image:url(\"/assets/acme-mark.svg\");"),
+            "{acme}"
+        );
         assert!(!acme.contains("#be123c"));
 
         assert!(beta.contains("<style data-frust-brand=\"tenant\">:root.fui-root{"));
         assert!(beta.contains("--fui-primary-bg:#be123c;"));
-        assert!(beta.contains("https://cdn.example.test/beta-mark.svg"));
+        // The generated, kernel-validated CSS must render RAW: interpolated as
+        // escaped text the `&` becomes `&amp;` and the url() breaks. Assert the
+        // EXACT unescaped url string, and that the escaped form is absent.
+        assert!(
+            beta.contains(
+                "--fui-brand-logo-image:url(\"https://cdn.example.test/beta-mark.svg?v=2&cache=1\");"
+            ),
+            "{beta}"
+        );
+        assert!(
+            !beta.contains("beta-mark.svg?v=2&amp;cache=1"),
+            "brand CSS was HTML-escaped: {beta}"
+        );
         assert!(!beta.contains("#1d4ed8"));
         assert!(!unset.contains("data-frust-brand"));
 
@@ -4107,6 +4241,74 @@ mod tests {
             "tenant A primary leaked into B: {b}"
         );
         assert_ne!(a, b);
+    }
+
+    /// WCAG 2.x relative luminance of an sRGB `#rrggbb` string. Pure arithmetic,
+    /// no dependency — so the contrast floor is checked, not trusted.
+    fn relative_luminance(hex: &str) -> f64 {
+        let hex = hex.strip_prefix('#').expect("hex color");
+        let channel = |i: usize| {
+            let v = u8::from_str_radix(&hex[i..i + 2], 16).expect("hex channel") as f64 / 255.0;
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4)
+    }
+
+    fn contrast_ratio(fg: &str, bg: &str) -> f64 {
+        let (a, b) = (relative_luminance(fg), relative_luminance(bg));
+        let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn every_accent_family_is_complete_and_its_ink_meets_aa() {
+        // ink lands on the default page background
+        const SURFACE: &str = "#ffffff";
+        const AA_NORMAL: f64 = 4.5;
+
+        fn token_names(family: &[(&'static str, &'static str); 7]) -> Vec<&'static str> {
+            let mut names: Vec<&'static str> = family.iter().map(|(token, _)| *token).collect();
+            names.sort_unstable();
+            names
+        }
+
+        // every accent option resolves to a family, and every family shares one
+        // token-name set — no accent may leave a member static-blue
+        let reference = token_names(accent_family(ACCENT_COLORS[0]).expect("first accent family"));
+        assert_eq!(reference.len(), 7, "duplicate token in the reference family");
+        for accent in ACCENT_COLORS {
+            let family =
+                accent_family(accent).unwrap_or_else(|| panic!("no family for accent {accent}"));
+            assert_eq!(
+                token_names(family),
+                reference,
+                "accent {accent} declares a different token set"
+            );
+
+            let ink = family
+                .iter()
+                .find_map(|(token, value)| (*token == "--fui-blue-ink").then_some(*value))
+                .expect("family declares --fui-blue-ink");
+            let ratio = contrast_ratio(ink, SURFACE);
+            assert!(
+                ratio >= AA_NORMAL,
+                "accent {accent} ink {ink} is {ratio:.2}:1 on {SURFACE}, below AA {AA_NORMAL}:1"
+            );
+        }
+
+        // the Select vocabulary and the family table are the same closed set
+        assert_eq!(ACCENT_FAMILIES.len(), ACCENT_COLORS.len());
+        for family in ACCENT_FAMILIES {
+            assert!(
+                ACCENT_COLORS.contains(&family[0].1),
+                "family {} has no matching accent option",
+                family[0].1
+            );
+        }
     }
 
     #[test]
