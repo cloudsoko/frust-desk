@@ -276,19 +276,52 @@ struct SubGuard {
     sub: String,
 }
 
+/// Concurrency bound on the fire-and-forget unsubscribe fan-out. Modest on
+/// purpose: enough parallel cleanups to keep pace with an ordinary close rate,
+/// small enough that a reconnect storm cannot grow the blocking pool without
+/// limit (each un-permitted drop would otherwise queue a `spawn_blocking` task).
+const CLEANUP_UNSUBSCRIBE_PERMITS: usize = 8;
+
+/// The cleanup permit pool. A permit is held for the unsubscribe task's whole
+/// lifetime, so at most `CLEANUP_UNSUBSCRIBE_PERMITS` unsubscribes run at once.
+fn cleanup_permits() -> &'static tokio::sync::Semaphore {
+    static S: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    S.get_or_init(|| tokio::sync::Semaphore::new(CLEANUP_UNSUBSCRIBE_PERMITS))
+}
+
+/// Unsubscribes skipped because the cleanup pool was saturated — a named,
+/// attributable signal, not a silent drop.
+static CLEANUP_SKIPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl Drop for SubGuard {
     fn drop(&mut self) {
+        // Cleanup rides the tokio runtime; outside one there is nothing to spawn.
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        // Bound the fan-out. Reconnect churn drops many guards at once; taking a
+        // permit (held for the task's lifetime) caps concurrent unsubscribes. On
+        // a saturated pool we SKIP rather than block or queue unboundedly: the
+        // kernel enforces a per-table subscription budget, so a slot left
+        // un-unsubscribed here is reclaimed server-side by that budget (or when
+        // the socket's session ends) — bounded, never fatal. Count the skip.
+        let permit = match cleanup_permits().try_acquire() {
+            Ok(permit) => permit,
+            Err(_) => {
+                CLEANUP_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+        };
         let token = self.token.clone();
         let sub = self.sub.clone();
-        if tokio::runtime::Handle::try_current().is_ok() {
-            let _task = tokio::task::spawn_blocking(move || {
-                let _ = kernel::call(
-                    Some(&token),
-                    &format!("/unsubscribe/{sub}"),
-                    &serde_json::json!({}),
-                );
-            });
-        }
+        let _task = tokio::task::spawn_blocking(move || {
+            let _permit = permit; // released when the unsubscribe finishes
+            let _ = kernel::call(
+                Some(&token),
+                &format!("/unsubscribe/{sub}"),
+                &serde_json::json!({}),
+            );
+        });
     }
 }
 
@@ -345,5 +378,36 @@ mod tests {
         let error = kernel_failure_response(&cx, 401, &serde_json::json!({}))
             .expect_err("401 must redirect");
         assert!(error.downcast_ref::<RedirectError>().is_some());
+    }
+
+    #[tokio::test]
+    async fn saturated_cleanup_pool_skips_unsubscribe_without_panicking() {
+        use std::sync::atomic::Ordering;
+
+        // Drain every cleanup permit and hold them, so a dropped guard cannot
+        // acquire one and must take the skip path (deterministic — no timing).
+        let sem = cleanup_permits();
+        let mut held = Vec::new();
+        while let Ok(permit) = sem.try_acquire() {
+            held.push(permit);
+        }
+        assert_eq!(sem.available_permits(), 0, "pool must be saturated");
+
+        let before = CLEANUP_SKIPPED.load(Ordering::Relaxed);
+        // Dropping the guard runs Drop synchronously; the pool is empty, so it
+        // counts a skip and returns rather than queueing a task.
+        drop(SubGuard {
+            token: "t".into(),
+            sub: "sales_invoice".into(),
+        });
+        assert_eq!(
+            CLEANUP_SKIPPED.load(Ordering::Relaxed),
+            before + 1,
+            "the skip path must be taken (and counted) when the pool is saturated"
+        );
+
+        // Releasing the held permits restores the pool to full capacity.
+        drop(held);
+        assert_eq!(sem.available_permits(), CLEANUP_UNSUBSCRIBE_PERMITS);
     }
 }
