@@ -783,11 +783,27 @@ mod tests {
         let mut from = 0;
         while let Some(i) = src[from..].find(&needle) {
             let open = from + i + needle.len();
-            // find the matching close paren
+            // Find the matching close paren. Parens inside a `"..."` literal are
+            // text, not delimiters, so track in-string state (with backslash
+            // escapes) and ignore them — otherwise `label: ")"` closes the call
+            // early and later args are lost.
             let mut depth = 1usize;
             let mut end = open;
+            let mut in_str = false;
+            let mut escaped = false;
             for (off, c) in src[open..].char_indices() {
+                if in_str {
+                    if escaped {
+                        escaped = false;
+                    } else if c == '\\' {
+                        escaped = true;
+                    } else if c == '"' {
+                        in_str = false;
+                    }
+                    continue;
+                }
                 match c {
+                    '"' => in_str = true,
                     '(' => depth += 1,
                     ')' => {
                         depth -= 1;
@@ -800,16 +816,131 @@ mod tests {
                 }
             }
             let args = &src[open..end.max(open)];
-            let pneedle = format!("{param}: \"");
-            if let Some(j) = args.find(&pneedle) {
-                let after = &args[j + pneedle.len()..];
-                if let Some(k) = after.find('"') {
-                    out.push(after[..k].to_string());
-                }
+            if let Some(value) = outer_literal_arg(args, param) {
+                out.push(value);
             }
             from = open;
         }
         out
+    }
+
+    fn outer_literal_arg(args: &str, param: &str) -> Option<String> {
+        let needle = format!("{param}: \"");
+        let mut depth = 0usize;
+        let mut quoted = false;
+        let mut escaped = false;
+        for (index, ch) in args.char_indices() {
+            if quoted {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    quoted = false;
+                }
+                continue;
+            }
+            match ch {
+                '"' => quoted = true,
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                _ if depth == 0 && args[index..].starts_with(&needle) => {
+                    let boundary = args[..index]
+                        .chars()
+                        .next_back()
+                        .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+                    if !boundary {
+                        continue;
+                    }
+                    let after = &args[index + needle.len()..];
+                    // Locate the closing quote, honoring backslash escapes so an
+                    // embedded `\"` does not terminate the literal prematurely.
+                    let mut lit_escaped = false;
+                    let end = after.char_indices().find_map(|(j, c)| {
+                        if lit_escaped {
+                            lit_escaped = false;
+                            None
+                        } else if c == '\\' {
+                            lit_escaped = true;
+                            None
+                        } else if c == '"' {
+                            Some(j)
+                        } else {
+                            None
+                        }
+                    })?;
+                    return Some(after[..end].to_string());
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn component_arg_parser_ignores_nested_call_arguments() {
+        let planted = [
+            r#"fui_button(
+            label: fui_"#,
+            r#"alert(variant: "solid", "nested"),
+            href: "/"
+        )"#,
+        ]
+        .concat();
+        let outer = planted
+            .strip_prefix("fui_button(")
+            .and_then(|args| args.strip_suffix(')'))
+            .expect("planted outer call");
+        assert!(
+            outer.find("variant: \"").is_some(),
+            "the planted case must reproduce the old args.find misattribution"
+        );
+        assert!(call_site_args(&planted, "fui_button", "variant").is_empty());
+        assert_eq!(
+            call_site_args(&planted, "fui_alert", "variant"),
+            vec!["solid"]
+        );
+
+        let outer_after_nested = r#"fui_button(
+            label: fui_badge(color: "blue", "nested"),
+            variant: "ghost"
+        )"#;
+        assert_eq!(
+            call_site_args(outer_after_nested, "fui_button", "variant"),
+            vec!["ghost"]
+        );
+    }
+
+    // Uses a component name (`fui_probe`) NOT scanned by
+    // `every_component_variant_literal_has_a_class`: that guard reads this very
+    // source file, so a real component fixture here would be read as a live call
+    // site — and these deliberately-malformed values (an escaped quote can never
+    // be a CSS class) would fail it. The parser is name-agnostic, so the shape
+    // is proven all the same.
+    #[test]
+    fn component_arg_parser_is_string_aware() {
+        // A `)` inside an earlier argument's literal must not be read as the
+        // call's close, or `variant` (which follows it) is silently lost.
+        let paren_in_literal = r#"fui_probe(label: ")", variant: "solid")"#;
+        assert_eq!(
+            call_site_args(paren_in_literal, "fui_probe", "variant"),
+            vec!["solid"]
+        );
+
+        // An escaped quote inside the matched literal must not end it early.
+        let escaped_quote = r#"fui_probe(variant: "so\"lid")"#;
+        assert_eq!(
+            call_site_args(escaped_quote, "fui_probe", "variant"),
+            vec![r#"so\"lid"#]
+        );
+
+        // Both hazards at once: a `)` in a preceding literal AND an escaped
+        // quote in the matched literal.
+        let combined = r#"fui_probe(label: ")", variant: "gh\"ost")"#;
+        assert_eq!(
+            call_site_args(combined, "fui_probe", "variant"),
+            vec![r#"gh\"ost"#]
+        );
     }
 
 }

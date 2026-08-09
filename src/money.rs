@@ -87,6 +87,9 @@ pub(crate) fn money_sub(a: &str, b: &str, scale: usize) -> Option<String> {
     let diff = scaled(a)?.checked_sub(scaled(b)?)?;
     let neg = diff < 0;
     let mag = diff.unsigned_abs();
+    if scale == 0 {
+        return Some(format!("{}{mag}", if neg { "-" } else { "" }));
+    }
     let unit = 10u128.checked_pow(u32::try_from(scale).ok()?)?;
     let (whole, frac) = (mag / unit, mag % unit);
     Some(format!(
@@ -149,6 +152,7 @@ mod tests {
         // the report's own question: Meridian charged 300, paid 120
         assert_eq!(money_sub("300", "120", 2).as_deref(), Some("180.00"));
         assert_eq!(money_sub("300.00", "120.00", 2).as_deref(), Some("180.00"));
+        assert_eq!(money_sub("9", "2", 0).as_deref(), Some("7"));
 
         // the classic float traps — an f64 implementation fails these
         assert_eq!(money_sub("0.30", "0.10", 2).as_deref(), Some("0.20"));

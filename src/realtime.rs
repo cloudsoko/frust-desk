@@ -1,10 +1,11 @@
-use crate::{admit, kernel, require_session};
-use futures_core::Stream;
+use crate::{admit, kernel, kernel_status, require_session};
 use topcoat::{
     Result,
     context::Cx,
     router::{
-        content::sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response, StatusCode,
+        content::{Json, sse::{Event, KeepAlive, Sse}},
+        error::{bad_request, redirect},
         path_param, route,
     },
     view::{component, view},
@@ -119,11 +120,39 @@ pub(crate) async fn live_updates(doctype: &str) -> Result {
 #[path_param(error = bad_request("bad name"))]
 struct LiveName(String);
 
+fn is_live_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn live_name(cx: &Cx) -> Result<String> {
+    let name = path_param::<LiveName>(cx)?.to_string();
+    if !is_live_name(&name) {
+        return Err(bad_request("bad live name").into());
+    }
+    Ok(name)
+}
+
+fn kernel_failure_response(
+    cx: &Cx,
+    code: u16,
+    body: &serde_json::Value,
+) -> Result<Response> {
+    match code {
+        401 => Err(redirect("/login").into()),
+        429 => (StatusCode::TOO_MANY_REQUESTS, Json(body.clone())).into_response(cx),
+        503 => (StatusCode::SERVICE_UNAVAILABLE, Json(body.clone())).into_response(cx),
+        _ => Err(kernel_status(code, body)),
+    }
+}
+
 #[route(POST "/live/subscribe/{live_name}")]
-async fn live_subscribe(cx: &Cx) -> Result<String> {
+async fn live_subscribe(cx: &Cx) -> Result<Response> {
     let s = require_session(cx)?;
     let _permit = admit()?;
-    let table = path_param::<LiveName>(cx)?.to_string();
+    let table = live_name(cx)?;
     let (code, body) = kernel::call_async(
         Some(&s.token),
         &format!("/subscribe/{table}"),
@@ -131,17 +160,16 @@ async fn live_subscribe(cx: &Cx) -> Result<String> {
     )
     .await;
     if code != 200 {
-        // budget refusal / disabled realtime: the list keeps polling
-        return Err(topcoat::router::error::bad_request("live unavailable").into());
+        return kernel_failure_response(cx, code, &body);
     }
-    Ok(body.to_string())
+    Json(body).into_response(cx)
 }
 
 #[route(POST "/live/events/{live_name}")]
-async fn live_events(cx: &Cx) -> Result<String> {
+async fn live_events(cx: &Cx) -> Result<Response> {
     let s = require_session(cx)?;
     let _permit = admit()?;
-    let sub = path_param::<LiveName>(cx)?.to_string();
+    let sub = live_name(cx)?;
     let (code, body) = kernel::call_async(
         Some(&s.token),
         &format!("/events/{sub}"),
@@ -149,9 +177,9 @@ async fn live_events(cx: &Cx) -> Result<String> {
     )
     .await;
     if code != 200 {
-        return Err(topcoat::router::error::bad_request("subscription gone").into());
+        return kernel_failure_response(cx, code, &body);
     }
-    Ok(body.to_string())
+    Json(body).into_response(cx)
 }
 
 /// The push transport — one long-lived SSE stream per focused view,
@@ -175,10 +203,10 @@ async fn live_events(cx: &Cx) -> Result<String> {
 /// own permission story. The subscription runs under the SUBSCRIBER'S session,
 /// so a clerk's stream carries only a clerk's events.
 #[route(GET "/live/sse/{live_name}")]
-async fn live_sse(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use<>>> {
+async fn live_sse(cx: &Cx) -> Result<Response> {
     let s = require_session(cx)?;
     let _permit = admit()?;
-    let table = path_param::<LiveName>(cx)?.to_string();
+    let table = live_name(cx)?;
     let (code, body) = kernel::call_async(
         Some(&s.token),
         &format!("/subscribe/{table}"),
@@ -186,10 +214,7 @@ async fn live_sse(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use
     )
     .await;
     if code != 200 {
-        // budget refusal (429) / realtime disabled: refuse the stream so the
-        // client falls back to polling rather than holding a
-        // connection that will never tick.
-        return Err(topcoat::router::error::bad_request("live unavailable").into());
+        return kernel_failure_response(cx, code, &body);
     }
     let sub = body["sub"].as_str().unwrap_or_default().to_string();
 
@@ -214,6 +239,8 @@ async fn live_sse(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use
             // design avoids. Exists so the measurement can be shown to FAIL.
             #[cfg(feature = "naive-blocking-sse")]
             std::thread::sleep(std::time::Duration::from_millis(LIVE_DRAIN_MS));
+            // Deliberately outside request admission: each drain is a short,
+            // non-blocking queue read and this loop is bounded to one per subscriber.
             let (code, body) = kernel::call_async(
                 Some(&guard.token),
                 &format!("/events/{sub}"),
@@ -229,11 +256,13 @@ async fn live_sse(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use
             let ev = Event::new()
                 .event(if n > 0 { "tick" } else { "idle" })
                 .data(n.to_string());
-            Some((Ok(ev), Some(guard)))
+            Some((Ok::<Event, topcoat::Error>(ev), Some(guard)))
         }
     });
 
-    Ok(Sse::new(events).keep_alive(KeepAlive::new()))
+    Sse::new(events)
+        .keep_alive(KeepAlive::new())
+        .into_response(cx)
 }
 
 /// How often the Desk drains the kernel on a subscriber's behalf. Matches the
@@ -247,27 +276,138 @@ struct SubGuard {
     sub: String,
 }
 
+/// Concurrency bound on the fire-and-forget unsubscribe fan-out. Modest on
+/// purpose: enough parallel cleanups to keep pace with an ordinary close rate,
+/// small enough that a reconnect storm cannot grow the blocking pool without
+/// limit (each un-permitted drop would otherwise queue a `spawn_blocking` task).
+const CLEANUP_UNSUBSCRIBE_PERMITS: usize = 8;
+
+/// The cleanup permit pool. A permit is held for the unsubscribe task's whole
+/// lifetime, so at most `CLEANUP_UNSUBSCRIBE_PERMITS` unsubscribes run at once.
+fn cleanup_permits() -> &'static tokio::sync::Semaphore {
+    static S: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    S.get_or_init(|| tokio::sync::Semaphore::new(CLEANUP_UNSUBSCRIBE_PERMITS))
+}
+
+/// Unsubscribes skipped because the cleanup pool was saturated — a named,
+/// attributable signal, not a silent drop.
+static CLEANUP_SKIPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl Drop for SubGuard {
     fn drop(&mut self) {
-        // One short call; the kernel's idle reaper is the backstop if it fails.
-        let _ = kernel::call(
-            Some(&self.token),
-            &format!("/unsubscribe/{}", self.sub),
-            &serde_json::json!({}),
-        );
+        // Cleanup rides the tokio runtime; outside one there is nothing to spawn.
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        // Bound the fan-out. Reconnect churn drops many guards at once; taking a
+        // permit (held for the task's lifetime) caps concurrent unsubscribes. On
+        // a saturated pool we SKIP rather than block or queue unboundedly: the
+        // kernel enforces a per-table subscription budget, so a slot left
+        // un-unsubscribed here is reclaimed server-side by that budget (or when
+        // the socket's session ends) — bounded, never fatal. Count the skip.
+        let permit = match cleanup_permits().try_acquire() {
+            Ok(permit) => permit,
+            Err(_) => {
+                CLEANUP_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+        };
+        let token = self.token.clone();
+        let sub = self.sub.clone();
+        let _task = tokio::task::spawn_blocking(move || {
+            let _permit = permit; // released when the unsubscribe finishes
+            let _ = kernel::call(
+                Some(&token),
+                &format!("/unsubscribe/{sub}"),
+                &serde_json::json!({}),
+            );
+        });
     }
 }
 
 #[route(POST "/live/unsubscribe/{live_name}")]
-async fn live_unsubscribe(cx: &Cx) -> Result<String> {
+async fn live_unsubscribe(cx: &Cx) -> Result<Response> {
     let s = require_session(cx)?;
     let _permit = admit()?;
-    let sub = path_param::<LiveName>(cx)?.to_string();
-    let _ = kernel::call_async(
+    let sub = live_name(cx)?;
+    let (code, body) = kernel::call_async(
         Some(&s.token),
         &format!("/unsubscribe/{sub}"),
         &serde_json::json!({}),
     )
     .await;
-    Ok(r#"{"ok":true}"#.to_string())
+    if code != 200 {
+        return kernel_failure_response(cx, code, &body);
+    }
+    Json(serde_json::json!({ "ok": true })).into_response(cx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use topcoat::router::{error::RedirectError, to_bytes};
+
+    #[test]
+    fn live_route_names_accept_only_identifiers() {
+        for name in ["sales_invoice", "Invoice2", "01abcdef"] {
+            assert!(is_live_name(name));
+        }
+        for name in ["", "sales/invoice", "sales invoice", "sales-invoice", "café"] {
+            assert!(!is_live_name(name));
+        }
+    }
+
+    #[tokio::test]
+    async fn live_kernel_failures_keep_capacity_status_and_redirect_unauthorized() {
+        let cx = Cx::default();
+        for (code, expected) in [
+            (429, StatusCode::TOO_MANY_REQUESTS),
+            (503, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let body = serde_json::json!({ "error": { "detail": format!("capacity {code}") } });
+            let response = kernel_failure_response(&cx, code, &body).expect("capacity response");
+            assert_eq!(response.status(), expected);
+            let bytes = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("capacity body");
+            let rendered: serde_json::Value =
+                serde_json::from_slice(&bytes).expect("JSON capacity body");
+            assert_eq!(rendered, body);
+        }
+
+        let error = kernel_failure_response(&cx, 401, &serde_json::json!({}))
+            .expect_err("401 must redirect");
+        assert!(error.downcast_ref::<RedirectError>().is_some());
+    }
+
+    #[tokio::test]
+    async fn saturated_cleanup_pool_skips_unsubscribe_without_panicking() {
+        use std::sync::atomic::Ordering;
+
+        // Drain every cleanup permit and hold them, so a dropped guard cannot
+        // acquire one and must take the skip path (deterministic — no timing).
+        let sem = cleanup_permits();
+        let mut held = Vec::new();
+        while let Ok(permit) = sem.try_acquire() {
+            held.push(permit);
+        }
+        assert_eq!(sem.available_permits(), 0, "pool must be saturated");
+
+        let before = CLEANUP_SKIPPED.load(Ordering::Relaxed);
+        // Dropping the guard runs Drop synchronously; the pool is empty, so it
+        // counts a skip and returns rather than queueing a task.
+        drop(SubGuard {
+            token: "t".into(),
+            sub: "sales_invoice".into(),
+        });
+        assert_eq!(
+            CLEANUP_SKIPPED.load(Ordering::Relaxed),
+            before + 1,
+            "the skip path must be taken (and counted) when the pool is saturated"
+        );
+
+        // Releasing the held permits restores the pool to full capacity.
+        drop(held);
+        assert_eq!(sem.available_permits(), CLEANUP_UNSUBSCRIBE_PERMITS);
+    }
 }

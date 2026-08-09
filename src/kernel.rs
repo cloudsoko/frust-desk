@@ -29,6 +29,9 @@ mod client {
             let pool = max_inflight().clamp(8, 64);
             ureq::Agent::config_builder()
                 .http_status_as_error(false)
+                // Browser SSE is Desk-generated; this agent carries only bounded kernel calls.
+                .timeout_connect(Some(std::time::Duration::from_secs(10)))
+                .timeout_global(Some(std::time::Duration::from_secs(60)))
                 .max_idle_connections_per_host(pool)
                 .max_idle_connections(pool)
                 .build()
@@ -38,11 +41,10 @@ mod client {
 
     /// **The admission ceiling**, from `FRUST_DESK_MAX_INFLIGHT`.
     ///
-    /// Default 24: just above the kernel's own worker pool (`Rest::serve`
-    /// clamps to 2..=16). Queueing a little keeps the kernel fed; queueing 500
-    /// deep only converts a fast refusal into a slow timeout. Load testing
-    /// measured the knee at ~50 concurrent, and past it the Desk answered 500
-    /// rather than waiting — the wrong answer for a UI tier.
+    /// Default 64: load testing measured the throughput plateau at about 50
+    /// concurrent calls, so 64 leaves modest scheduling headroom while keeping
+    /// the queue bounded. Queueing hundreds deep only converts a fast refusal
+    /// into a slow timeout.
     ///
     /// **Configurable because it is also the control.** Setting it absurdly
     /// high disables shedding and reproduces the earlier overload failure mode on
@@ -52,12 +54,19 @@ mod client {
     pub fn max_inflight() -> usize {
         static N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
         *N.get_or_init(|| {
-            std::env::var("FRUST_DESK_MAX_INFLIGHT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .filter(|n| *n > 0)
-                .unwrap_or(64)
+            bounded_max_inflight(
+                std::env::var("FRUST_DESK_MAX_INFLIGHT")
+                    .ok()
+                    .as_deref(),
+            )
         })
+    }
+
+    pub(super) fn bounded_max_inflight(raw: Option<&str>) -> usize {
+        raw.and_then(|v| v.parse().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(64)
+            .min(tokio::sync::Semaphore::MAX_PERMITS)
     }
 
     static INFLIGHT: AtomicI64 = AtomicI64::new(0);
@@ -405,6 +414,7 @@ pub(crate) fn admit_or_busy() -> std::result::Result<client::Permit, topcoat::Er
 /// A capacity answer must survive the hop.
 pub(crate) fn kernel_status(code: u16, body: &serde_json::Value) -> topcoat::Error {
     match code {
+        401 => redirect("/login").into(),
         // the kernel's typed capacity answers (tenant budget, live-sub
         // budget, and any 503 it sheds itself) pass through as capacity
         429 | 503 => Busy::now(),
@@ -471,7 +481,8 @@ pub(crate) fn take_flash(cx: &Cx) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::tenant_from_host;
+    use super::{client::bounded_max_inflight, kernel_status, tenant_from_host};
+    use topcoat::{context::Cx, router::{IntoResponse, StatusCode}};
 
     #[test]
     fn tenant_hint_comes_only_from_a_real_subdomain() {
@@ -484,6 +495,30 @@ mod tests {
                 "invented a tenant from {host:?}"
             );
         }
+    }
+
+    #[test]
+    fn max_inflight_is_bounded_by_the_semaphore_limit() {
+        assert_eq!(bounded_max_inflight(None), 64);
+        assert_eq!(bounded_max_inflight(Some("0")), 64);
+        assert_eq!(bounded_max_inflight(Some("17")), 17);
+        assert_eq!(
+            bounded_max_inflight(Some(&usize::MAX.to_string())),
+            tokio::sync::Semaphore::MAX_PERMITS
+        );
+    }
+
+    #[test]
+    fn kernel_unauthorized_status_redirects_to_login() {
+        let error = kernel_status(
+            401,
+            &serde_json::json!({ "error": { "kind": "permission-denied" } }),
+        );
+        let response = error
+            .into_response(&Cx::default())
+            .expect("redirect response");
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(response.headers()["location"], "/login");
     }
 
 }
