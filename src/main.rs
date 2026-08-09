@@ -994,16 +994,22 @@ async fn meta_one(s: &Session, name: &str) -> std::result::Result<DocType, topco
     serde_json::from_value(body["doctype"].clone()).map_err(err500)
 }
 
-async fn workspace_list(s: &Session) -> Vec<Workspace> {
+async fn workspace_list(s: &Session) -> std::result::Result<Vec<Workspace>, topcoat::Error> {
     let body = serde_json::json!({
         "limit": 200,
         "order": { "path": "label", "dir": "asc" }
     });
     let (code, out) = kernel::call_async(Some(&s.token), "/read/workspace", &body).await;
     if code != 200 {
-        return Vec::new();
+        // A failed read is an outage, not "this tenant has no workspaces".
+        // Collapsing it to an empty list would render the starter-card fallback
+        // as if the workspace directory were genuinely empty, hiding the failure
+        // behind a plausible-looking home page. The error must survive the hop.
+        return Err(kernel_status(code, &out));
     }
-    serde_json::from_value(out["rows"].clone()).unwrap_or_default()
+    // A successful *empty* response is the honest "no workspaces yet" — the
+    // starter fallback stands in only for that case, never for a failure.
+    Ok(serde_json::from_value(out["rows"].clone()).unwrap_or_default())
 }
 
 fn workspace_links(workspace: &Workspace, doctypes: &[DocType]) -> Vec<WorkspaceLink> {
@@ -1369,7 +1375,10 @@ async fn home(cx: &Cx) -> Result {
     let s = require_session(cx)?;
     let _permit = admit()?;
     let doctypes = meta_list(&s).await?;
-    let workspaces = workspace_list(&s).await;
+    // A workspace-read failure propagates as an honest error page (the same
+    // friendly-error path `meta_list` uses), rather than masquerading as an
+    // empty directory and dropping the user onto the starter-card fallback.
+    let workspaces = workspace_list(&s).await?;
     let is_manager = s.role == "manager";
     // ── A workspace, not a schema browser ──
     //
@@ -2263,14 +2272,57 @@ async fn form_page(cx: &Cx) -> Result {
                                 .iter()
                                 .position(|(fname, _)| fname == &field.fieldname)
                                 .unwrap_or(0)];
-                            line_editor(
-                                parent_field: &field.fieldname,
-                                child: child,
-                                rows: &[],
-                                shown: shown,
-                                editable: true,
-                                row_money: &row_money,
-                            )
+                            // read_only_when governs the edit affordances. A child
+                            // table's editability is STRUCTURAL — the spare rows,
+                            // the "Add row" button and the remove column either
+                            // render or they do not — so unlike a scalar's reactive
+                            // :disabled it is resolved once, here, from the source
+                            // field's starting value (empty on a new record). It is
+                            // read-only while the source equals the rule's value (or
+                            // differs, for `ne`), the same disable test the scalar
+                            // branch applies.
+                            let editable = match ro {
+                                Some((rule, _)) => {
+                                    let t = rule.target();
+                                    let read_only =
+                                        if rule.op == "ne" { !t.is_empty() } else { t.is_empty() };
+                                    !read_only
+                                }
+                                None => true,
+                            };
+                            // depends_on hides the whole editor reactively, with the
+                            // same operators as the scalar branch — a Table is no
+                            // longer exempt from the field's visibility rule.
+                            match dep {
+                                Some((rule, src)) => {
+                                    let t = rule.target();
+                                    match rule.op.as_str() {
+                                        "ne" => {
+                                            <div :hidden=$(src.get() == t)>
+                                                line_editor(parent_field: &field.fieldname, child: child, rows: &[], shown: shown, editable: editable, row_money: &row_money)
+                                            </div>
+                                        }
+                                        "not_empty" => {
+                                            <div :hidden=$(src.get().is_empty())>
+                                                line_editor(parent_field: &field.fieldname, child: child, rows: &[], shown: shown, editable: editable, row_money: &row_money)
+                                            </div>
+                                        }
+                                        "empty" => {
+                                            <div :hidden=$(!src.get().is_empty())>
+                                                line_editor(parent_field: &field.fieldname, child: child, rows: &[], shown: shown, editable: editable, row_money: &row_money)
+                                            </div>
+                                        }
+                                        _ => {
+                                            <div :hidden=$(src.get() != t)>
+                                                line_editor(parent_field: &field.fieldname, child: child, rows: &[], shown: shown, editable: editable, row_money: &row_money)
+                                            </div>
+                                        }
+                                    }
+                                }
+                                None => {
+                                    line_editor(parent_field: &field.fieldname, child: child, rows: &[], shown: shown, editable: editable, row_money: &row_money)
+                                }
+                            }
                         }
                         None => {}
                     }
@@ -3196,8 +3248,16 @@ async fn save_single(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Resu
             let Some(child_name) = f.options.first() else {
                 continue;
             };
-            let Ok(child) = meta_one(&s, child_name).await else {
-                continue;
+            let child = match meta_one(&s, child_name).await {
+                Ok(child) => child,
+                Err(_) => {
+                    // Child metadata failed to load. Skipping this Table field
+                    // would silently drop the rows the user typed and still write
+                    // the parent — a partial save. Refuse the whole write and
+                    // return to the form; a partial document is never built.
+                    flash(cx, "Couldn't load a linked table — nothing was saved. Please try again.");
+                    return Ok(see_other(&format!("/single/{name}")));
+                }
             };
             let rows = collect_rows(&f.fieldname, &child, &fields);
             doc.insert(f.fieldname.clone(), serde_json::Value::Array(rows));
@@ -3244,8 +3304,16 @@ async fn submit_new(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Resul
             let Some(child_name) = f.options.first() else {
                 continue;
             };
-            let Ok(child) = meta_one(&s, child_name).await else {
-                continue;
+            let child = match meta_one(&s, child_name).await {
+                Ok(child) => child,
+                Err(_) => {
+                    // Child metadata failed to load. Skipping this Table field
+                    // would silently drop the rows the user typed and still write
+                    // the parent — a partial save. Refuse the whole write and
+                    // return to the form; a partial document is never built.
+                    flash(cx, "Couldn't load a linked table — nothing was saved. Please try again.");
+                    return Ok(see_other(&format!("/form/{name}")));
+                }
             };
             doc.insert(
                 f.fieldname.clone(),
@@ -3715,8 +3783,17 @@ async fn save_doc(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Result<
                     let Some(child_name) = f.options.first() else {
                         continue;
                     };
-                    let Ok(child) = meta_one(&s, child_name).await else {
-                        continue;
+                    let child = match meta_one(&s, child_name).await {
+                        Ok(child) => child,
+                        Err(_) => {
+                            // Child metadata failed to load. Skipping this Table
+                            // field would silently drop the rows the user typed
+                            // and still write the parent — a partial save. Refuse
+                            // the whole write and return to the record; a partial
+                            // document is never built.
+                            flash(cx, "Couldn't load a linked table — nothing was saved. Please try again.");
+                            return Ok(see_other(&format!("/doc/{name}/{key}")));
+                        }
                     };
                     let rows = collect_rows(&f.fieldname, &child, &fields);
                     doc.insert(f.fieldname.clone(), serde_json::Value::Array(rows));
@@ -4181,6 +4258,101 @@ mod tests {
     use topcoat::cookie::RouterBuilderCookieExt;
     use topcoat::router::{Body, Request, Router, RouterBuilderDiscoverExt, to_bytes};
 
+    /// Router-level tests share two process globals: the `FRUST_KERNEL` env var
+    /// and the `OnceLock` ureq agent that reads it. `cargo test` runs them in
+    /// parallel threads, so each takes this lock before pointing the Desk at its
+    /// own fake kernel. Recovering from a poisoned lock (`into_inner`) stops one
+    /// failing test from cascading a panic into every other router test.
+    static KERNEL_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A fake kernel that stays up for the whole test, records the request LINE
+    /// of every call, and answers each through `responder`. Unlike the brand
+    /// fake kernel it serves no fixed request COUNT, so a handler that (rightly)
+    /// makes *fewer* calls than a happy path — the whole point of the
+    /// no-partial-write fix — can never hang the test waiting for a call that
+    /// must not happen.
+    fn spawn_kernel(
+        responder: impl Fn(&str) -> (u16, serde_json::Value) + Send + 'static,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake kernel");
+        let addr = listener.local_addr().expect("fake kernel address");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let recorder = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .expect("read timeout");
+                let mut request = Vec::new();
+                loop {
+                    let mut chunk = [0_u8; 1024];
+                    let Ok(read) = stream.read(&mut chunk) else {
+                        break;
+                    };
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                    let Some(head_end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&request[..head_end]);
+                    let content_len = head
+                        .lines()
+                        .find_map(|line| {
+                            line.split_once(':').and_then(|(name, value)| {
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= head_end + 4 + content_len {
+                        break;
+                    }
+                }
+                let request = String::from_utf8_lossy(&request).to_string();
+                let line = request.lines().next().unwrap_or("").to_string();
+                recorder
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(line);
+                let (status, body) = responder(request.as_str());
+                let reason = match status {
+                    200 => "OK",
+                    303 => "See Other",
+                    500 => "Internal Server Error",
+                    _ => "Status",
+                };
+                let body = body.to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    /// Drives an authenticated GET page through the router, returning its HTTP
+    /// status and rendered HTML.
+    async fn get_page(router: &Router, uri: &str, cookie: &str) -> (u16, String) {
+        let request = Request::builder()
+            .uri(uri)
+            .header("cookie", cookie)
+            .body(Body::empty())
+            .expect("page request");
+        let response = router.handle(request).await;
+        let status = response.status().as_u16();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("page bytes");
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
     fn fake_brand_kernel(requests: usize) -> (String, std::thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake kernel");
         let addr = listener.local_addr().expect("fake kernel address");
@@ -4271,10 +4443,10 @@ mod tests {
 
     #[tokio::test]
     async fn two_tenant_pages_carry_their_own_style_tag_content() {
+        // Serialize with the other router-level tests: they all set the
+        // process-global FRUST_KERNEL endpoint the shared agent reads from.
+        let _env = KERNEL_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let (base, server) = fake_brand_kernel(3);
-        // This test owns the only Desk kernel client calls in this test binary,
-        // so setting its endpoint before the shared agent is initialized cannot
-        // race another request.
         unsafe { std::env::set_var("FRUST_KERNEL", base) };
         let router = Router::builder().cookies().discover().build();
 
@@ -4874,5 +5046,161 @@ mod tests {
         let day: u32 = parts[2].parse().expect("day");
         assert!((1..=12).contains(&m), "month out of range in {d}");
         assert!((1..=31).contains(&day), "day out of range in {d}");
+    }
+
+    /// Responder for the home page: a submittable DocType that WOULD produce a
+    /// starter card, and a workspace read the caller chooses to fail or empty.
+    /// The layout's brand read is answered blank.
+    fn home_kernel(
+        workspace: (u16, serde_json::Value),
+    ) -> impl Fn(&str) -> (u16, serde_json::Value) {
+        move |req: &str| {
+            let line = req.lines().next().unwrap_or("");
+            if line.starts_with("GET /meta ") {
+                (
+                    200,
+                    serde_json::json!({
+                        "doctypes": [
+                            { "name": "sales_invoice", "submittable": true, "fields": [] }
+                        ]
+                    }),
+                )
+            } else if line.starts_with("POST /read/workspace ") {
+                workspace.clone()
+            } else {
+                // the layout's brand read — no tenant brand
+                (200, serde_json::json!({ "row": {} }))
+            }
+        }
+    }
+
+    const HOME_COOKIE: &str = "frust_session=home-token; frust_user=manager; frust_role=manager";
+
+    /// A workspace-read FAILURE is an outage, not an empty directory: it must
+    /// surface as an error page, never be laundered into the starter-card
+    /// fallback that a genuinely empty tenant sees.
+    #[tokio::test]
+    async fn home_workspace_read_failure_is_an_error_not_an_empty_directory() {
+        let _env = KERNEL_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, seen) = spawn_kernel(home_kernel((
+            500,
+            serde_json::json!({ "error": { "kind": "db", "detail": "workspace store down" } }),
+        )));
+        unsafe { std::env::set_var("FRUST_KERNEL", base) };
+        let router = Router::builder().cookies().discover().build();
+
+        let (status, html) = get_page(&router, "/", HOME_COOKIE).await;
+
+        assert_eq!(
+            status, 500,
+            "a workspace outage must surface as an error page, not a 200 home: {html}"
+        );
+        assert!(
+            !html.contains("Open list"),
+            "the starter-card fallback rendered on a workspace FAILURE — an outage was masked as an empty directory: {html}"
+        );
+        let seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            seen.iter().any(|l| l.starts_with("POST /read/workspace")),
+            "the workspace read was never attempted: {seen:?}"
+        );
+    }
+
+    /// The other half of the distinction: a SUCCESSFUL empty workspace read is
+    /// the honest "no workspaces yet", and only that renders the starter cards.
+    /// Same meta as the failure test, so the two differ only by the workspace
+    /// response — error ≠ empty, proven by contrast.
+    #[tokio::test]
+    async fn home_empty_workspaces_falls_back_to_starter_cards() {
+        let _env = KERNEL_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, _seen) =
+            spawn_kernel(home_kernel((200, serde_json::json!({ "rows": [] }))));
+        unsafe { std::env::set_var("FRUST_KERNEL", base) };
+        let router = Router::builder().cookies().discover().build();
+
+        let (status, html) = get_page(&router, "/", HOME_COOKIE).await;
+
+        assert_eq!(status, 200, "an empty workspace read is a normal home page: {html}");
+        assert!(
+            html.contains("Open list"),
+            "a genuinely empty workspace directory must fall back to the starter cards: {html}"
+        );
+    }
+
+    /// A child-table metadata failure during save must NOT be papered over by
+    /// skipping the Table field and writing the parent anyway: that silently
+    /// drops the rows the user typed. The whole write is refused, the failure is
+    /// flashed, and the user is returned to the form.
+    #[tokio::test]
+    async fn submit_new_writes_nothing_when_child_meta_fails() {
+        let _env = KERNEL_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let (base, seen) = spawn_kernel(|req: &str| {
+            let line = req.lines().next().unwrap_or("");
+            if line.starts_with("GET /meta/order ") {
+                (
+                    200,
+                    serde_json::json!({
+                        "doctype": {
+                            "name": "order",
+                            "fields": [
+                                { "fieldname": "customer", "fieldtype": "Data" },
+                                { "fieldname": "lines", "fieldtype": "Table", "options": ["order_line"] }
+                            ]
+                        }
+                    }),
+                )
+            } else if line.starts_with("GET /meta/order_line ") {
+                // the child metadata is unavailable — a transient outage
+                (
+                    500,
+                    serde_json::json!({ "error": { "kind": "db", "detail": "child meta down" } }),
+                )
+            } else {
+                // a /write must never be reached; answer harmlessly if it is,
+                // so the assertion (not a hang) reports the regression
+                (200, serde_json::json!({ "created": { "id": "order:x" } }))
+            }
+        });
+        unsafe { std::env::set_var("FRUST_KERNEL", base) };
+        let router = Router::builder().cookies().discover().build();
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/submit/order")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header("cookie", "frust_session=t; frust_user=clerk; frust_role=clerk")
+            .body(Body::from("customer=Acme&lines.0.item=Widget&lines.0.qty=2"))
+            .expect("submit request");
+        let response = router.handle(request).await;
+
+        assert_eq!(
+            response.status().as_u16(),
+            303,
+            "a child-meta failure returns to the form, not onward to the record"
+        );
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(location, "/form/order", "must return to the form the user was on");
+        let flashed = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .any(|c| c.contains("frust_flash="));
+        assert!(flashed, "the failure must be flashed to the user");
+
+        let seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            seen.iter().any(|l| l.starts_with("GET /meta/order ")),
+            "the parent meta should have been read: {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|l| l.contains("/write/")),
+            "a partial document was written despite the child-table failure: {seen:?}"
+        );
     }
 }
