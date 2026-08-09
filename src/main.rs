@@ -536,12 +536,46 @@ struct DocType {
     fields: Vec<DocField>,
     #[serde(default)]
     aggregates: Vec<Aggregate>,
+    /// Request-specific capability, computed by the kernel's permission
+    /// compiler. Old kernels omit it and retain the previous visible posture.
+    #[serde(default = "default_can_read")]
+    can_read: bool,
     /// Tier-2 client script, metadata like everything else. Its
     /// presence is the ONLY thing that loads the 4 MB engine — see
     /// `form_page`. Absent or blank means a scriptless form, which must
     /// never pay for the engine in requests or bytes.
     #[serde(default)]
     client_script: Option<String>,
+}
+
+fn default_can_read() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Workspace {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    module: String,
+    #[serde(default)]
+    items: Vec<WorkspaceItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WorkspaceItem {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkspaceLink {
+    label: String,
+    href: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -960,6 +994,48 @@ async fn meta_one(s: &Session, name: &str) -> std::result::Result<DocType, topco
     serde_json::from_value(body["doctype"].clone()).map_err(err500)
 }
 
+async fn workspace_list(s: &Session) -> Vec<Workspace> {
+    let body = serde_json::json!({
+        "limit": 200,
+        "order": { "path": "label", "dir": "asc" }
+    });
+    let (code, out) = kernel::call_async(Some(&s.token), "/read/workspace", &body).await;
+    if code != 200 {
+        return Vec::new();
+    }
+    serde_json::from_value(out["rows"].clone()).unwrap_or_default()
+}
+
+fn workspace_links(workspace: &Workspace, doctypes: &[DocType]) -> Vec<WorkspaceLink> {
+    workspace
+        .items
+        .iter()
+        .filter_map(|item| {
+            let target = doctypes
+                .iter()
+                .find(|dt| dt.name == item.target && dt.can_read)?;
+            let href = match item.kind.as_str() {
+                "doctype" if target.issingle => format!("/single/{}", target.name),
+                "doctype" => format!("/list/{}", target.name),
+                "report"
+                    if doctypes
+                        .iter()
+                        .any(|dt| dt.aggregates.iter().any(|agg| agg.rollup == item.target)) =>
+                {
+                    format!("/report/{}", item.target)
+                }
+                _ => return None,
+            };
+            let label = if item.label.is_empty() {
+                target.label_or_name()
+            } else {
+                item.label.clone()
+            };
+            Some(WorkspaceLink { label, href })
+        })
+        .collect()
+}
+
 /// How many blank rows a child table offers beyond what exists.
 /// Rows are pre-rendered (with their signals) and REVEALED by "Add row" —
 /// no client-side DOM creation, so every row is fully reactive from the
@@ -1293,6 +1369,7 @@ async fn home(cx: &Cx) -> Result {
     let s = require_session(cx)?;
     let _permit = admit()?;
     let doctypes = meta_list(&s).await?;
+    let workspaces = workspace_list(&s).await;
     let is_manager = s.role == "manager";
     // ── A workspace, not a schema browser ──
     //
@@ -1314,7 +1391,34 @@ async fn home(cx: &Cx) -> Result {
         <div class="fui-page-head">
             <h1 class="fui-page-title">"Home"</h1>
         </div>
-        if !starters.is_empty() {
+        if !workspaces.is_empty() {
+            <div class="fui-cards" data-workspace-home="records">
+                for workspace in &workspaces {
+                    let links = workspace_links(workspace, &doctypes);
+                    <div class="fui-card" data-workspace=(workspace.label.as_str())>
+                        <div class="fui-card__title">
+                            if workspace.label.is_empty() { "Workspace" } else { (workspace.label.as_str()) }
+                        </div>
+                        if !workspace.module.is_empty() {
+                            <div style="margin-top: var(--fui-space-2);">
+                                frust_ui::fui_badge(label: workspace.module.clone(), color: "gray")
+                            </div>
+                        }
+                        <div class="fui-card__actions">
+                            for link in &links {
+                                frust_ui::fui_button(
+                                    label: link.label.clone(), variant: "ghost",
+                                    href: link.href.clone(),
+                                )
+                            }
+                            if links.is_empty() {
+                                <span class="fui-muted">"No items available for your role."</span>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        } else if !starters.is_empty() {
             <div class="fui-cards">
                 for dt in &starters {
                     <div class="fui-card">
@@ -1642,6 +1746,7 @@ async fn list_page(cx: &Cx) -> Result {
     if dt.issingle {
         return Err(redirect(&format!("/single/{name}")).into());
     }
+
     let q = list_query(cx);
 
     // build the contract filter from Tier-0 shapes only
@@ -2097,6 +2202,18 @@ async fn form_page(cx: &Cx) -> Result {
             link_opts.push((f.fieldname.clone(), link_options(&s, target).await));
         }
     }
+    let mut child_meta: Vec<(String, DocType)> = Vec::new();
+    for f in dt.fields.iter().filter(|f| f.fieldtype == "Table") {
+        if let Some(child_name) = f.options.first() {
+            if let Ok(child) = meta_one(&s, child_name).await {
+                child_meta.push((f.fieldname.clone(), child));
+            }
+        }
+    }
+    let table_shown: Vec<Signal<f64>> = child_meta.iter().map(|_| Signal::new(0.0)).collect();
+    let row_money: Vec<Signal<String>> = (0..SPARE_ROWS)
+        .map(|_| Signal::new(String::new()))
+        .collect();
 
     view! {
         <script type="module" src="/runtime.js"></script>
@@ -2113,6 +2230,8 @@ async fn form_page(cx: &Cx) -> Result {
 
         // declare every field signal to the browser runtime
         for sig in &values { (SignalDeclaration::new(sig)) }
+        for sig in &table_shown { (SignalDeclaration::new(sig)) }
+        for sig in &row_money { (SignalDeclaration::new(sig)) }
 
         // The lazy-load gate, and the whole of it. A scriptless
         // DocType emits nothing here, so the form costs exactly the document
@@ -2137,7 +2256,26 @@ async fn form_page(cx: &Cx) -> Result {
                     .map(|(_, o)| o.as_slice())
                     .unwrap_or(&[]);
 
-                match dep {
+                if field.fieldtype == "Table" {
+                    match child_meta.iter().find(|(fname, _)| fname == &field.fieldname) {
+                        Some((_, child)) => {
+                            let shown = &table_shown[child_meta
+                                .iter()
+                                .position(|(fname, _)| fname == &field.fieldname)
+                                .unwrap_or(0)];
+                            line_editor(
+                                parent_field: &field.fieldname,
+                                child: child,
+                                rows: &[],
+                                shown: shown,
+                                editable: true,
+                                row_money: &row_money,
+                            )
+                        }
+                        None => {}
+                    }
+                } else {
+                  match dep {
                     Some((rule, src)) => {
                         let t = rule.target();
                         match rule.op.as_str() {
@@ -2169,6 +2307,7 @@ async fn form_page(cx: &Cx) -> Result {
                             dyn_field(field: field, val: val, ro: ro, req: req, bad: bad, link_options: lopts)
                         </div>
                     }
+                  }
                 }
             }
             <div class="fui-form-actions">
@@ -2517,6 +2656,7 @@ async fn line_cells<'a>(
                     }
                 } else if cf.fieldtype == "Select" {
                     <select name=(&name)>
+                        if value.is_empty() { <option value="" selected="selected"></option> }
                         for opt in &cf.options {
                             if opt == &value { <option selected="selected">(opt)</option> }
                             else { <option>(opt)</option> }
@@ -3100,12 +3240,25 @@ async fn submit_new(cx: &Cx, Form(fields): Form<Vec<(String, String)>>) -> Resul
 
     let mut doc = serde_json::Map::new();
     for f in &dt.fields {
-        let raw = fields
-            .iter()
-            .find(|(k, _)| k == &f.fieldname)
-            .map(|(_, v)| v.as_str())
-            .unwrap_or("");
-        doc.insert(f.fieldname.clone(), typed_value(f, raw));
+        if f.fieldtype == "Table" {
+            let Some(child_name) = f.options.first() else {
+                continue;
+            };
+            let Ok(child) = meta_one(&s, child_name).await else {
+                continue;
+            };
+            doc.insert(
+                f.fieldname.clone(),
+                serde_json::Value::Array(collect_rows(&f.fieldname, &child, &fields)),
+            );
+        } else {
+            let raw = fields
+                .iter()
+                .find(|(k, _)| k == &f.fieldname)
+                .map(|(_, v)| v.as_str())
+                .unwrap_or("");
+            doc.insert(f.fieldname.clone(), typed_value(f, raw));
+        }
     }
     let (code, body) = kernel::call_async(
         Some(&s.token),
@@ -4021,8 +4174,9 @@ mod tests {
     use std::net::TcpListener;
 
     use super::{
-        ACCENT_COLORS, ACCENT_FAMILIES, BRAND_TOKEN_NAMES, MONEY_SCALE, accent_family,
-        brand_settings_meta, brand_style_from_row, money_sub, pad_money, tenant_from_host,
+        ACCENT_COLORS, ACCENT_FAMILIES, BRAND_TOKEN_NAMES, DocType, MONEY_SCALE, Workspace,
+        accent_family, brand_settings_meta, brand_style_from_row, money_sub, pad_money,
+        tenant_from_host, workspace_links,
     };
     use topcoat::cookie::RouterBuilderCookieExt;
     use topcoat::router::{Body, Request, Router, RouterBuilderDiscoverExt, to_bytes};
@@ -4361,6 +4515,47 @@ mod tests {
                 "invented a tenant from {host:?}"
             );
         }
+    }
+
+    #[test]
+    fn workspace_items_keep_order_and_filter_unreadable_targets() {
+        let workspace: Workspace = serde_json::from_value(serde_json::json!({
+            "label": "Accounting",
+            "items": [
+                { "label": "Sales invoices", "kind": "doctype", "target": "sales_invoice" },
+                { "label": "Accounts receivable", "kind": "report", "target": "ar_outstanding" },
+                { "label": "Missing", "kind": "doctype", "target": "missing" }
+            ]
+        }))
+        .unwrap();
+        let doctypes: Vec<DocType> = serde_json::from_value(serde_json::json!([
+            {
+                "name": "sales_invoice",
+                "submittable": true,
+                "can_read": true,
+                "fields": [],
+                "aggregates": [{ "kind": "counter", "rollup": "ar_outstanding" }]
+            },
+            { "name": "ar_outstanding", "can_read": false, "fields": [] }
+        ]))
+        .unwrap();
+
+        let clerk = workspace_links(&workspace, &doctypes);
+        assert_eq!(clerk.len(), 1);
+        assert_eq!(clerk[0].label, "Sales invoices");
+        assert_eq!(clerk[0].href, "/list/sales_invoice");
+
+        let mut manager_doctypes = doctypes;
+        manager_doctypes[1].can_read = true;
+        let manager = workspace_links(&workspace, &manager_doctypes);
+        assert_eq!(
+            manager
+                .iter()
+                .map(|link| link.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Sales invoices", "Accounts receivable"]
+        );
+        assert_eq!(manager[1].href, "/report/ar_outstanding");
     }
 
     /// The money-formatting ruling, pinned. The interesting cases are the two
