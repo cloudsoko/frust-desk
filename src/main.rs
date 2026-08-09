@@ -4261,9 +4261,12 @@ mod tests {
     /// Router-level tests share two process globals: the `FRUST_KERNEL` env var
     /// and the `OnceLock` ureq agent that reads it. `cargo test` runs them in
     /// parallel threads, so each takes this lock before pointing the Desk at its
-    /// own fake kernel. Recovering from a poisoned lock (`into_inner`) stops one
-    /// failing test from cascading a panic into every other router test.
-    static KERNEL_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// own fake kernel. A `tokio::sync::Mutex` lets the guard be held across the
+    /// `.await` points inside each test without tripping `await_holding_lock`;
+    /// unlike `std::sync::Mutex` it has no poisoning, so a panicking test simply
+    /// releases the guard instead of cascading a poison error into every other
+    /// router test.
+    static KERNEL_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// A fake kernel that stays up for the whole test, records the request LINE
     /// of every call, and answers each through `responder`. Unlike the brand
@@ -4445,7 +4448,7 @@ mod tests {
     async fn two_tenant_pages_carry_their_own_style_tag_content() {
         // Serialize with the other router-level tests: they all set the
         // process-global FRUST_KERNEL endpoint the shared agent reads from.
-        let _env = KERNEL_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = KERNEL_ENV.lock().await;
         let (base, server) = fake_brand_kernel(3);
         unsafe { std::env::set_var("FRUST_KERNEL", base) };
         let router = Router::builder().cookies().discover().build();
@@ -5081,7 +5084,7 @@ mod tests {
     /// fallback that a genuinely empty tenant sees.
     #[tokio::test]
     async fn home_workspace_read_failure_is_an_error_not_an_empty_directory() {
-        let _env = KERNEL_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = KERNEL_ENV.lock().await;
         let (base, seen) = spawn_kernel(home_kernel((
             500,
             serde_json::json!({ "error": { "kind": "db", "detail": "workspace store down" } }),
@@ -5112,7 +5115,7 @@ mod tests {
     /// response — error ≠ empty, proven by contrast.
     #[tokio::test]
     async fn home_empty_workspaces_falls_back_to_starter_cards() {
-        let _env = KERNEL_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = KERNEL_ENV.lock().await;
         let (base, _seen) =
             spawn_kernel(home_kernel((200, serde_json::json!({ "rows": [] }))));
         unsafe { std::env::set_var("FRUST_KERNEL", base) };
@@ -5133,7 +5136,7 @@ mod tests {
     /// flashed, and the user is returned to the form.
     #[tokio::test]
     async fn submit_new_writes_nothing_when_child_meta_fails() {
-        let _env = KERNEL_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _env = KERNEL_ENV.lock().await;
         let (base, seen) = spawn_kernel(|req: &str| {
             let line = req.lines().next().unwrap_or("");
             if line.starts_with("GET /meta/order ") {
