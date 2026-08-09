@@ -271,4 +271,3 @@ async fn live_unsubscribe(cx: &Cx) -> Result<String> {
     .await;
     Ok(r#"{"ok":true}"#.to_string())
 }
-

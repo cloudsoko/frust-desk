@@ -575,3 +575,241 @@ async fn ui_gallery(cx: &Cx) -> Result {
         </html>
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::brand::BRAND_TOKEN_NAMES;
+
+    // ── The CSS-seam guard ──────────────────────────────────────────────────
+    //
+    // The Rust->CSS seam has NO type system: a class name or custom property
+    // that does not exist compiles, renders *nearly* right, and says nothing.
+    // It has bitten repeatedly — an invented spacing/font token once drew the
+    // first paint in Times New Roman, and `fui-alert--error` drew every error
+    // flash with no colour and no icon. So the check is wired in here where
+    // it cannot be skipped, the same move the surql/tenancy monopolies made.
+
+    const CSS: &str = include_str!("frust_ui.css");
+    const UI_RS: &str = include_str!("frust_ui.rs");
+    const PAGES_RS: &str = include_str!("pages.rs");
+
+    /// Every `--fui-*` the stylesheet READS must be one it also DEFINES.
+    #[test]
+    fn every_custom_property_referenced_is_defined() {
+        let defined = defined_properties(CSS);
+        let mut missing: Vec<&str> = referenced_properties(CSS)
+            .into_iter()
+            .filter(|p| !defined.contains(p))
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        assert!(
+            missing.is_empty(),
+            "custom properties referenced but never defined: {missing:?}\n\
+             (a `var(--typo)` silently falls back to nothing — the Rust->CSS seam has no type system)"
+        );
+    }
+
+    #[test]
+    fn every_brand_override_targets_a_defined_custom_property() {
+        let defined = defined_properties(CSS);
+        let missing: Vec<&str> = BRAND_TOKEN_NAMES
+            .iter()
+            .copied()
+            .filter(|token| !defined.contains(token))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "brand settings target tokens absent from the static stylesheet: {missing:?}"
+        );
+    }
+
+    /// Every component VARIANT the Rust passes as a literal must be a modifier
+    /// **that component** defines.
+    ///
+    /// This is the shape that actually bit: variants are composed at runtime
+    /// (`format!("fui-btn fui-btn--{variant}")`), so no compiler and no static
+    /// class scan can see them — only comparing each literal call site against
+    /// its own component's defined modifiers can.
+    ///
+    /// **Bound to the component on purpose.** The first cut of this guard
+    /// accepted a value if ANY component defined it, and that made it
+    /// decorative: the real bug was `fui-btn--solid`, and `.fui-badge--solid`
+    /// exists — so the permissive version passed the planted bug. A guard that
+    /// cannot fail on the defect it was written for is worse than none.
+    #[test]
+    fn every_component_variant_literal_has_a_class() {
+        let mut bad = Vec::new();
+        // The Rust function name and the CSS class STEM differ (`fui_button`
+        // renders `.fui-btn--*`), so the pairing is stated explicitly. Deriving
+        // it — `component.replace('-', "_")` — produced `fui_btn`, which matches
+        // no call site, so the button half silently checked NOTHING and passed
+        // the planted bug. Found only by planting it.
+        for (component, fn_name, param) in [
+            ("fui-btn", "fui_button", "variant"),
+            ("fui-alert", "fui_alert", "variant"),
+            ("fui-badge", "fui_badge", "color"),
+        ] {
+            let defined = defined_modifiers(CSS, component);
+            assert!(
+                !defined.is_empty(),
+                "no `.{component}--*` classes found — did the CSS move?"
+            );
+            for src in [UI_RS, PAGES_RS] {
+                for value in call_site_args(src, fn_name, param) {
+                    if !defined.contains(&value) {
+                        bad.push(format!(
+                            "{fn_name}({param}: {value:?}) — no `.{component}--{value}` in the stylesheet"
+                        ));
+                    }
+                }
+            }
+        }
+        bad.sort();
+        bad.dedup();
+        assert!(
+            bad.is_empty(),
+            "component variants passed from Rust with no matching CSS class:\n  {}\n\
+             (these COMPILE and render nearly-right — `fui-alert--error` shipped undetected, \
+             drawing every Desk error with no colour and no icon)",
+            bad.join("\n  ")
+        );
+    }
+
+    // ── the guard's own parsers, kept simple and testable ──
+
+    fn defined_properties(css: &str) -> std::collections::HashSet<&str> {
+        css.lines()
+            .filter_map(|l| {
+                let t = l.trim();
+                let name = t.strip_prefix("--")?;
+                let end = name.find(':')?;
+                Some(&t[..end + 2])
+            })
+            .collect()
+    }
+
+    fn referenced_properties(css: &str) -> Vec<&str> {
+        let mut out = Vec::new();
+        let mut rest = css;
+        while let Some(i) = rest.find("var(--") {
+            let after = &rest[i + 4..];
+            let end = after
+                .find(|c: char| c == ',' || c == ')' || c.is_whitespace())
+                .unwrap_or(after.len());
+            out.push(&after[..end]);
+            rest = &after[end..];
+        }
+        out
+    }
+
+    fn selector_block<'a>(css: &'a str, selector: &str) -> &'a str {
+        let selector_start = css
+            .find(selector)
+            .unwrap_or_else(|| panic!("missing selector {selector}"));
+        let open = css[selector_start..]
+            .find('{')
+            .map(|offset| selector_start + offset)
+            .unwrap_or_else(|| panic!("selector {selector} has no declaration block"));
+        let mut depth = 0usize;
+        for (offset, ch) in css[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &css[open + 1..open + offset];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("selector {selector} has an unterminated declaration block")
+    }
+
+    fn declared_properties(block: &str) -> std::collections::BTreeMap<&str, &str> {
+        block
+            .lines()
+            .filter_map(|line| {
+                let declaration = line.trim().strip_prefix("--")?;
+                let (name, value) = declaration.split_once(':')?;
+                Some((name, value.trim().trim_end_matches(';')))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn preferred_dark_tokens_match_explicit_dark_tokens() {
+        let explicit = declared_properties(selector_block(CSS, "\n[data-theme=\"dark\"] {"));
+        let preferred = declared_properties(selector_block(
+            CSS,
+            "\n  :root:not([data-theme=\"light\"]) {",
+        ));
+        assert!(
+            !explicit.is_empty(),
+            "explicit dark theme defines no tokens"
+        );
+        assert_eq!(
+            preferred, explicit,
+            "OS-driven dark mode must redeclare the complete explicit dark token set"
+        );
+    }
+
+    fn defined_modifiers(css: &str, component: &str) -> std::collections::HashSet<String> {
+        let needle = format!(".{component}--");
+        let mut out = std::collections::HashSet::new();
+        let mut rest = css;
+        while let Some(i) = rest.find(&needle) {
+            let after = &rest[i + needle.len()..];
+            let end = after
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                .unwrap_or(after.len());
+            if end > 0 {
+                out.insert(after[..end].to_string());
+            }
+            rest = &after[end..];
+        }
+        out
+    }
+
+    /// `param: "value"` literals that appear inside a `fui_x(...)` call.
+    ///
+    /// Scans from each call's opening paren to its matching close, so a
+    /// `variant:` belonging to a *different* component on a nearby line cannot
+    /// be mistaken for this one's.
+    fn call_site_args(src: &str, fn_name: &str, param: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let needle = format!("{fn_name}(");
+        let mut from = 0;
+        while let Some(i) = src[from..].find(&needle) {
+            let open = from + i + needle.len();
+            // find the matching close paren
+            let mut depth = 1usize;
+            let mut end = open;
+            for (off, c) in src[open..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + off;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let args = &src[open..end.max(open)];
+            let pneedle = format!("{param}: \"");
+            if let Some(j) = args.find(&pneedle) {
+                let after = &args[j + pneedle.len()..];
+                if let Some(k) = after.find('"') {
+                    out.push(after[..k].to_string());
+                }
+            }
+            from = open;
+        }
+        out
+    }
+
+}

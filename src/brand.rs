@@ -6,7 +6,7 @@ use topcoat::{context::Cx, view::{NodeViewParts, PartsWriter}};
 pub(crate) const BRAND_SETTINGS: &str = "brand_settings";
 
 const PRIMARY_COLORS: &[&str] = &["#171717", "#1d4ed8", "#047857", "#7c3aed", "#be123c"];
-pub(crate) const ACCENT_COLORS: &[&str] = &[
+const ACCENT_COLORS: &[&str] = &[
     "#0d8ef8", "#2563eb", "#059669", "#7c3aed", "#db2777", "#d97706",
 ];
 const RADIUS_SCALES: &[&str] = &["compact", "comfortable", "rounded"];
@@ -30,7 +30,7 @@ const FONT_FAMILIES: &[&str] = &["Inter", "System UI", "Georgia", "Verdana"];
 ///
 /// Position 0 of each family is `("--fui-blue", <the accent option>)`, so the
 /// option a stored row selects is the family's own lookup key.
-pub(crate) const ACCENT_FAMILIES: &[[(&str, &str); 7]] = &[
+const ACCENT_FAMILIES: &[[(&str, &str); 7]] = &[
     [
         ("--fui-blue", "#0d8ef8"),
         ("--fui-blue-strong", "#077ddf"),
@@ -88,7 +88,7 @@ pub(crate) const ACCENT_FAMILIES: &[[(&str, &str); 7]] = &[
 ];
 
 /// The accent option a stored row selected keys into its precomputed family.
-pub(crate) fn accent_family(accent: &str) -> Option<&'static [(&'static str, &'static str); 7]> {
+fn accent_family(accent: &str) -> Option<&'static [(&'static str, &'static str); 7]> {
     ACCENT_FAMILIES.iter().find(|family| family[0].1 == accent)
 }
 
@@ -227,7 +227,7 @@ impl NodeViewParts for RawCss {
 /// Map stored brand data onto the fixed token vocabulary. Colors are emitted
 /// byte-for-byte, named radius and font choices select fixed bundles, and an
 /// accepted logo URL can only occupy the fixed `url("...")` value slot.
-pub(crate) fn brand_style_from_row(row: &serde_json::Value) -> Option<String> {
+fn brand_style_from_row(row: &serde_json::Value) -> Option<String> {
     let mut declarations = Vec::new();
 
     if let Some(value) = selected(row, "primary_color", PRIMARY_COLORS) {
@@ -295,3 +295,190 @@ pub(crate) async fn brand_style(s: Option<&Session>) -> Option<String> {
         .flatten()
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brand_settings_schema_is_a_bounded_single() {
+        let meta = brand_settings_meta();
+        assert_eq!(meta["name"], "brand_settings");
+        assert_eq!(meta["issingle"], true);
+        let fields = meta["fields"].as_array().expect("fields");
+        assert_eq!(fields.len(), 5);
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field["fieldname"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            [
+                "primary_color",
+                "accent_color",
+                "corner_radius_scale",
+                "font_family_name",
+                "logo_url"
+            ]
+        );
+        for field in &fields[..4] {
+            assert_eq!(field["fieldtype"], "Select", "untyped brand field: {field}");
+            let options = field["options"].as_array().expect("Select options");
+            assert_eq!(
+                options.first().and_then(serde_json::Value::as_str),
+                Some("")
+            );
+            assert!(options.len() > 1, "brand vocabulary is empty: {field}");
+        }
+        assert_eq!(fields[4]["fieldtype"], "Data");
+    }
+
+    #[test]
+    fn two_tenant_brand_rows_keep_content_provenance() {
+        let tenant_a = serde_json::json!({
+            "primary_color": "#1d4ed8",
+            "accent_color": "#059669",
+            "corner_radius_scale": "compact",
+            "font_family_name": "Inter",
+            "logo_url": "/assets/acme-mark.svg"
+        });
+        let tenant_b = serde_json::json!({
+            "primary_color": "#be123c",
+            "accent_color": "#7c3aed",
+            "corner_radius_scale": "rounded",
+            "font_family_name": "Georgia",
+            "logo_url": "https://cdn.example.test/beta-mark.svg"
+        });
+        let a = brand_style_from_row(&tenant_a).expect("tenant A style");
+        let b = brand_style_from_row(&tenant_b).expect("tenant B style");
+
+        assert!(a.contains("--fui-primary-bg:#1d4ed8;"), "{a}");
+        assert!(a.contains("--fui-blue:#059669;"), "{a}");
+        assert!(
+            a.contains("--fui-brand-logo-image:url(\"/assets/acme-mark.svg\");"),
+            "{a}"
+        );
+        assert!(
+            !a.contains("#be123c"),
+            "tenant B primary leaked into A: {a}"
+        );
+        assert!(b.contains("--fui-primary-bg:#be123c;"), "{b}");
+        assert!(b.contains("--fui-blue:#7c3aed;"), "{b}");
+        assert!(
+            b.contains("--fui-brand-logo-image:url(\"https://cdn.example.test/beta-mark.svg\");"),
+            "{b}"
+        );
+        assert!(
+            !b.contains("#1d4ed8"),
+            "tenant A primary leaked into B: {b}"
+        );
+        assert_ne!(a, b);
+    }
+
+    /// WCAG 2.x relative luminance of an sRGB `#rrggbb` string. Pure arithmetic,
+    /// no dependency — so the contrast floor is checked, not trusted.
+    fn relative_luminance(hex: &str) -> f64 {
+        let hex = hex.strip_prefix('#').expect("hex color");
+        let channel = |i: usize| {
+            let v = u8::from_str_radix(&hex[i..i + 2], 16).expect("hex channel") as f64 / 255.0;
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4)
+    }
+
+    fn contrast_ratio(fg: &str, bg: &str) -> f64 {
+        let (a, b) = (relative_luminance(fg), relative_luminance(bg));
+        let (hi, lo) = if a >= b { (a, b) } else { (b, a) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn every_accent_family_is_complete_and_its_ink_meets_aa() {
+        // ink lands on the default page background
+        const SURFACE: &str = "#ffffff";
+        const AA_NORMAL: f64 = 4.5;
+
+        fn token_names(family: &[(&'static str, &'static str); 7]) -> Vec<&'static str> {
+            let mut names: Vec<&'static str> = family.iter().map(|(token, _)| *token).collect();
+            names.sort_unstable();
+            names
+        }
+
+        // every accent option resolves to a family, and every family shares one
+        // token-name set — no accent may leave a member static-blue
+        let reference = token_names(accent_family(ACCENT_COLORS[0]).expect("first accent family"));
+        assert_eq!(reference.len(), 7, "duplicate token in the reference family");
+        for accent in ACCENT_COLORS {
+            let family =
+                accent_family(accent).unwrap_or_else(|| panic!("no family for accent {accent}"));
+            assert_eq!(
+                token_names(family),
+                reference,
+                "accent {accent} declares a different token set"
+            );
+
+            let ink = family
+                .iter()
+                .find_map(|(token, value)| (*token == "--fui-blue-ink").then_some(*value))
+                .expect("family declares --fui-blue-ink");
+            let ratio = contrast_ratio(ink, SURFACE);
+            assert!(
+                ratio >= AA_NORMAL,
+                "accent {accent} ink {ink} is {ratio:.2}:1 on {SURFACE}, below AA {AA_NORMAL}:1"
+            );
+        }
+
+        // the Select vocabulary and the family table are the same closed set
+        assert_eq!(ACCENT_FAMILIES.len(), ACCENT_COLORS.len());
+        for family in ACCENT_FAMILIES {
+            assert!(
+                ACCENT_COLORS.contains(&family[0].1),
+                "family {} has no matching accent option",
+                family[0].1
+            );
+        }
+    }
+
+    #[test]
+    fn unset_brand_settings_emit_no_style_content() {
+        assert_eq!(brand_style_from_row(&serde_json::json!({})), None);
+        assert_eq!(
+            brand_style_from_row(&serde_json::json!({
+                "primary_color": "",
+                "accent_color": "",
+                "corner_radius_scale": "",
+                "font_family_name": "",
+                "logo_url": ""
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn out_of_vocabulary_brand_data_is_not_css() {
+        let row = serde_json::json!({
+            "primary_color": "</style><script>alert(1)</script>"
+        });
+        assert_eq!(brand_style_from_row(&row), None);
+    }
+
+    #[test]
+    fn logo_url_cannot_escape_its_fixed_token_mapping() {
+        for logo_url in [
+            "javascript:alert(1)",
+            "data:image/svg+xml,<svg onload=alert(1)>",
+            "https://cdn.example/x.svg\");color:red;--owned:url(\"x",
+            "//foreign.example/x.svg",
+        ] {
+            assert_eq!(
+                brand_style_from_row(&serde_json::json!({ "logo_url": logo_url })),
+                None,
+                "unsafe logo entered CSS: {logo_url}"
+            );
+        }
+    }
+
+}

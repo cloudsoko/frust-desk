@@ -329,7 +329,7 @@ pub(crate) fn require_session(cx: &Cx) -> Result<Session, topcoat::Error> {
     session(cx).ok_or_else(|| redirect("/login").into())
 }
 
-pub(crate) fn tenant_from_host(host: &str) -> Option<&str> {
+fn tenant_from_host(host: &str) -> Option<&str> {
     let host = host.split(':').next()?.trim();
     if host.is_empty() || host.parse::<std::net::IpAddr>().is_ok() {
         return None;
@@ -467,4 +467,23 @@ pub(crate) fn take_flash(cx: &Cx) -> Option<String> {
         jar.remove(Cookie::build(("frust_flash", "")).path("/").build());
     }
     msg.filter(|m| !m.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tenant_from_host;
+
+    #[test]
+    fn tenant_hint_comes_only_from_a_real_subdomain() {
+        assert_eq!(tenant_from_host("acme.frust.test"), Some("acme"));
+        assert_eq!(tenant_from_host("beta.frust.test:3000"), Some("beta"));
+        for host in ["127.0.0.1:3000", "localhost:3000", "frust.test", ""] {
+            assert_eq!(
+                tenant_from_host(host),
+                None,
+                "invented a tenant from {host:?}"
+            );
+        }
+    }
+
 }

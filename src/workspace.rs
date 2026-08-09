@@ -80,3 +80,51 @@ pub(crate) fn workspace_links(
         .collect()
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pages::DocType;
+
+    #[test]
+    fn workspace_items_keep_order_and_filter_unreadable_targets() {
+        let workspace: Workspace = serde_json::from_value(serde_json::json!({
+            "label": "Accounting",
+            "items": [
+                { "label": "Sales invoices", "kind": "doctype", "target": "sales_invoice" },
+                { "label": "Accounts receivable", "kind": "report", "target": "ar_outstanding" },
+                { "label": "Missing", "kind": "doctype", "target": "missing" }
+            ]
+        }))
+        .unwrap();
+        let doctypes: Vec<DocType> = serde_json::from_value(serde_json::json!([
+            {
+                "name": "sales_invoice",
+                "submittable": true,
+                "can_read": true,
+                "fields": [],
+                "aggregates": [{ "kind": "counter", "rollup": "ar_outstanding" }]
+            },
+            { "name": "ar_outstanding", "can_read": false, "fields": [] }
+        ]))
+        .unwrap();
+
+        let clerk = workspace_links(&workspace, &doctypes);
+        assert_eq!(clerk.len(), 1);
+        assert_eq!(clerk[0].label, "Sales invoices");
+        assert_eq!(clerk[0].href, "/list/sales_invoice");
+
+        let mut manager_doctypes = doctypes;
+        manager_doctypes[1].can_read = true;
+        let manager = workspace_links(&workspace, &manager_doctypes);
+        assert_eq!(
+            manager
+                .iter()
+                .map(|link| link.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Sales invoices", "Accounts receivable"]
+        );
+        assert_eq!(manager[1].href, "/report/ar_outstanding");
+    }
+
+}
