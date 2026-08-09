@@ -228,6 +228,8 @@
   --fui-radius-md: 8px;    /* cards */
   --fui-radius-lg: 12px;   /* dialogs */
   --fui-radius-full: 9999px;
+  --fui-brand-logo-image: none;
+  --fui-brand-logo-display: none;
 
   /* pixel type scale (frappe-ui: same px, tight line-height for labels) */
   --fui-text-2xs: 11px;
@@ -951,11 +953,25 @@ body {
   z-index: 20;
 }
 .fui-nav-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fui-space-2);
   font-weight: 700;
   font-size: var(--fui-text-lg);
   color: var(--fui-ink-9);
   text-decoration: none;
   letter-spacing: -0.01em;
+}
+.fui-nav-brand::before {
+  content: "";
+  display: var(--fui-brand-logo-display);
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: none;
+  background-image: var(--fui-brand-logo-image);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
 }
 .fui-nav-link {
   color: var(--fui-ink-6);
