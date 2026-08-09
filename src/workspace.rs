@@ -1,4 +1,4 @@
-use crate::{DocType, Session, kernel, kernel_status};
+use crate::{DocType, Session, err500, kernel, kernel_status};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,7 +44,8 @@ pub(crate) async fn workspace_list(
     }
     // A successful *empty* response is the honest "no workspaces yet" — the
     // starter fallback stands in only for that case, never for a failure.
-    Ok(serde_json::from_value(out["rows"].clone()).unwrap_or_default())
+    serde_json::from_value(out["rows"].clone())
+        .map_err(|error| err500(format!("malformed workspace response: {error}")))
 }
 
 pub(crate) fn workspace_links(

@@ -800,16 +800,84 @@ mod tests {
                 }
             }
             let args = &src[open..end.max(open)];
-            let pneedle = format!("{param}: \"");
-            if let Some(j) = args.find(&pneedle) {
-                let after = &args[j + pneedle.len()..];
-                if let Some(k) = after.find('"') {
-                    out.push(after[..k].to_string());
-                }
+            if let Some(value) = outer_literal_arg(args, param) {
+                out.push(value);
             }
             from = open;
         }
         out
+    }
+
+    fn outer_literal_arg(args: &str, param: &str) -> Option<String> {
+        let needle = format!("{param}: \"");
+        let mut depth = 0usize;
+        let mut quoted = false;
+        let mut escaped = false;
+        for (index, ch) in args.char_indices() {
+            if quoted {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    quoted = false;
+                }
+                continue;
+            }
+            match ch {
+                '"' => quoted = true,
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                _ if depth == 0 && args[index..].starts_with(&needle) => {
+                    let boundary = args[..index]
+                        .chars()
+                        .next_back()
+                        .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+                    if !boundary {
+                        continue;
+                    }
+                    let after = &args[index + needle.len()..];
+                    let end = after.find('"')?;
+                    return Some(after[..end].to_string());
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn component_arg_parser_ignores_nested_call_arguments() {
+        let planted = [
+            r#"fui_button(
+            label: fui_"#,
+            r#"alert(variant: "solid", "nested"),
+            href: "/"
+        )"#,
+        ]
+        .concat();
+        let outer = planted
+            .strip_prefix("fui_button(")
+            .and_then(|args| args.strip_suffix(')'))
+            .expect("planted outer call");
+        assert!(
+            outer.find("variant: \"").is_some(),
+            "the planted case must reproduce the old args.find misattribution"
+        );
+        assert!(call_site_args(&planted, "fui_button", "variant").is_empty());
+        assert_eq!(
+            call_site_args(&planted, "fui_alert", "variant"),
+            vec!["solid"]
+        );
+
+        let outer_after_nested = r#"fui_button(
+            label: fui_badge(color: "blue", "nested"),
+            variant: "ghost"
+        )"#;
+        assert_eq!(
+            call_site_args(outer_after_nested, "fui_button", "variant"),
+            vec!["ghost"]
+        );
     }
 
 }

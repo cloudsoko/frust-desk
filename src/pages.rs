@@ -452,6 +452,8 @@ async fn install_brand_settings(cx: &Cx) -> Result<SeeOther> {
     let Some(s) = session(cx) else {
         return Ok(see_other("/login"));
     };
+    // The role cookie selects a Desk affordance only; the kernel authorizes
+    // the operation from the bearer token.
     if s.role != "manager" {
         return Err(bad_request("brand settings are manager-only").into());
     }
@@ -3271,6 +3273,28 @@ mod tests {
         assert!(
             seen.iter().any(|l| l.starts_with("POST /read/workspace")),
             "the workspace read was never attempted: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn home_malformed_workspace_rows_is_an_error_not_starter_cards() {
+        let _env = KERNEL_ENV.lock().await;
+        let (base, _seen) = spawn_kernel(home_kernel((
+            200,
+            serde_json::json!({ "rows": "not a workspace array" }),
+        )));
+        unsafe { std::env::set_var("FRUST_KERNEL", base) };
+        let router = Router::builder().cookies().discover().build();
+
+        let (status, html) = get_page(&router, "/", HOME_COOKIE).await;
+
+        assert_eq!(
+            status, 500,
+            "malformed workspace rows must surface as an error page: {html}"
+        );
+        assert!(
+            !html.contains("Open list"),
+            "starter cards rendered after a malformed successful response: {html}"
         );
     }
 
