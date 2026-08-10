@@ -1466,6 +1466,7 @@ class Waitable {
     #state;
     #isAsync;
     #isManualAsync;
+    #preserveFutureResult;
     #entryFnName = null;
     
     #onResolveHandlers = [];
@@ -1523,6 +1524,7 @@ class Waitable {
       this.#state = AsyncTask.State.INITIAL;
       this.#isAsync = opts?.isAsync ?? false;
       this.#isManualAsync = opts?.isManualAsync ?? false;
+      this.#preserveFutureResult = opts?.preserveFutureResult ?? false;
       this.#entryFnName = opts.entryFnName;
       
       const {
@@ -1544,7 +1546,11 @@ class Waitable {
           return;
         }
         
-        resolveCompletionPromise(results);
+        if (this.#preserveFutureResult && results instanceof FutureValue) {
+          results.resolveAsValue(resolveCompletionPromise);
+        } else {
+          resolveCompletionPromise(results);
+        }
       });
       
       const {
@@ -2242,6 +2248,7 @@ function createNewCurrentTask(args) {
     componentIdx,
     isAsync,
     isManualAsync,
+    preserveFutureResult,
     entryFnName,
     parentSubtaskID,
     callbackFnName,
@@ -2263,6 +2270,7 @@ function createNewCurrentTask(args) {
     componentIdx,
     isAsync,
     isManualAsync,
+    preserveFutureResult,
     entryFnName,
     callbackFn,
     callbackFnName,
@@ -6212,6 +6220,7 @@ function validate(arg0) {
     componentIdx: 0,
     isAsync: false,
     isManualAsync: false,
+    preserveFutureResult: false,
     entryFnName: 'hooksValidate',
     getCallbackFn: () => null,
     callbackFnName: null,
@@ -6416,6 +6425,7 @@ function spin() {
     componentIdx: 0,
     isAsync: false,
     isManualAsync: false,
+    preserveFutureResult: false,
     entryFnName: 'hooksSpin',
     getCallbackFn: () => null,
     callbackFnName: null,
@@ -6476,6 +6486,7 @@ function hog() {
     componentIdx: 0,
     isAsync: false,
     isManualAsync: false,
+    preserveFutureResult: false,
     entryFnName: 'hooksHog',
     getCallbackFn: () => null,
     callbackFnName: null,
@@ -8144,3 +8155,7 @@ const hooks = {
 };
 
 export { hooks, hooks as 'frust:plugin/hooks',  }
+export const _util = {
+  
+}
+
