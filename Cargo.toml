@@ -8,6 +8,7 @@ license = "AGPL-3.0-only"
 
 [dependencies]
 anyhow = "1"
+frust-ui = { path = "../frust-ui" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `time` is explicit (not left to feature unification via topcoat/sse): the SSE

@@ -445,6 +445,7 @@ name = "frust-desk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "frust-ui",
  "futures-core",
  "futures-util",
  "serde",
@@ -452,6 +453,13 @@ dependencies = [
  "tokio",
  "topcoat",
  "ureq",
+]
+
+[[package]]
+name = "frust-ui"
+version = "0.1.0"
+dependencies = [
+ "topcoat",
 ]
 
 [[package]]

@@ -12,9 +12,9 @@
 //! client-side via per-field runtime signals, so a field enabled or disabled
 //! by another field's value updates without a kernel round-trip.
 
-/// The Desk's design system, wired into the real pages. Lives
-/// here — Desk-local — and never in the vendored `topcoat` tree, which keeps
-/// the kernel and the framework lean, and the Desk owns its skin.
+/// Thin compatibility shim: component call sites retain `frust_ui::fui_*`,
+/// while the implementation and portable stylesheet come from `frust-ui`.
+/// This module owns only Desk chrome and the combined stylesheet route.
 mod frust_ui;
 mod brand;
 mod money;
