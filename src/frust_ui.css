@@ -326,13 +326,23 @@ body {
  */
 @media print {
   /* Paper is white and one-sided: pin the light palette regardless of the
-     user's OS theme, or a dark-mode Desk prints a black rectangle. */
-  :root {
+     user's OS theme, or a dark-mode Desk prints a black rectangle. A pane can
+     re-declare [data-theme] below :root, so reset surface AND ink tokens on
+     themed descendants too, or a dark pane keeps near-white ink on white paper. */
+  :root,
+  [data-theme] {
     --fui-surface-base: #ffffff;
     --fui-surface-1: #ffffff;
     --fui-surface-2: #ffffff;
     --fui-surface-3: #ffffff;
     --fui-surface-4: #ffffff;
+    --fui-ink-9: #0f0f0f;
+    --fui-ink-8: #171717;
+    --fui-ink-7: #383838;
+    --fui-ink-6: #525252;
+    --fui-ink-5: #7c7c7c;
+    --fui-ink-4: #999999;
+
     color-scheme: light;
   }
 

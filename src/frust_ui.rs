@@ -60,8 +60,9 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let referenced = referenced_properties(CHROME_CSS);
         let missing = referenced
-            .difference(&exported)
-            .copied()
+            .iter()
+            .filter(|token| !exported.contains(token.as_str()))
+            .cloned()
             .collect::<Vec<_>>();
         assert!(
             missing.is_empty(),
@@ -193,9 +194,12 @@ mod tests {
         classes
     }
 
-    fn referenced_properties(css: &str) -> BTreeSet<&str> {
+    fn referenced_properties(css: &str) -> BTreeSet<String> {
+        // Strip comments first (as `defined_classes` and `top_level_rules` do),
+        // so a commented-out `var(--fui-…)` is not counted as a live reference.
+        let css = without_comments(css);
         let mut properties = BTreeSet::new();
-        let mut rest = css;
+        let mut rest = css.as_str();
         while let Some(index) = rest.find("var(--fui-") {
             let property = &rest[index + 4..];
             let end = property
@@ -203,16 +207,18 @@ mod tests {
                     character == ',' || character == ')' || character.is_whitespace()
                 })
                 .unwrap_or(property.len());
-            properties.insert(&property[..end]);
+            properties.insert(property[..end].to_owned());
             rest = &property[end..];
         }
         properties
     }
 
     fn defined_modifiers(css: &str, component: &str) -> BTreeSet<String> {
+        // Strip comments so a commented-out `.fui-…--modifier` is not counted.
+        let css = without_comments(css);
         let needle = format!(".{component}--");
         let mut modifiers = BTreeSet::new();
-        let mut rest = css;
+        let mut rest = css.as_str();
         while let Some(index) = rest.find(&needle) {
             let value = &rest[index + needle.len()..];
             let end = value
@@ -315,11 +321,24 @@ mod tests {
         let mut rules = BTreeMap::new();
         let mut depth = 0usize;
         let mut start = 0usize;
+        // Track string literals so a brace inside a declaration value (e.g.
+        // `content: "}"`) is not read as structure. `saturating_sub` also keeps a
+        // stray closing brace from underflowing `depth` in a debug build; a truly
+        // unbalanced stylesheet is still reported by the final assertion. Escaped
+        // quotes inside strings are not handled — the served CSS contains none.
+        let mut string: Option<char> = None;
         for (index, character) in css.char_indices() {
+            if let Some(quote) = string {
+                if character == quote {
+                    string = None;
+                }
+                continue;
+            }
             match character {
+                '"' | '\'' => string = Some(character),
                 '{' => depth += 1,
                 '}' => {
-                    depth -= 1;
+                    depth = depth.saturating_sub(1);
                     if depth == 0 {
                         let rule = css[start..=index]
                             .split_ascii_whitespace()
