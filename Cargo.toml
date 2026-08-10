@@ -8,6 +8,11 @@ license = "AGPL-3.0-only"
 
 [dependencies]
 anyhow = "1"
+# frust-ui and topcoat are sibling crates in the cloudsoko monorepo checkout:
+# this app builds from within that layout, where ../frust-ui and
+# ../topcoat/crates/topcoat exist. It is not a standalone crate — cargo commands
+# here (including CI) run inside the monorepo so those sibling paths resolve.
+frust-ui = { path = "../frust-ui" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `time` is explicit (not left to feature unification via topcoat/sse): the SSE
